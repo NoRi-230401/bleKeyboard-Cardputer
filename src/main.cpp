@@ -1,39 +1,66 @@
+#include <Arduino.h>
+#include <SD.h>
 #include <BleKeyboard.h>
 #include <M5Cardputer.h>
-BLECharacteristic *keyboardInput;
+#include <M5StackUpdater.h>
 #include <map>
 
-#define CARDPUTER
 void disp_init();
-void prt(String message);
+void m5stack_begin();
+void SDU_lobby();
+bool SD_begin();
+void dispKey(String msg);
 void dispLx(uint8_t Lx, String msg);
+void dispBleInfo(bool connected);
 
-bool DISP_ON = true;
 String PROG_NAME = "Tiny bleKeyboard";
+bool SD_ENABLE;
+SPIClass SPI2;
+bool DISP_ON = true;
+void checkBattery();
+void notifyConnection();
+void keySend(m5::Keyboard_Class::KeysState key);
+void keyInput();
+void dispSleepTime();
+String const arrow_key[] = {"up_arrow", "down_arrow", "left_arrow", "right_arrow"};
+int arrow_key_index = -1;
+// BLECharacteristic *keyboardInput;
 BleKeyboard bleKey;
 
 // ３分間キー入力がなければスリープ
 const unsigned int keyInputTimeout = 180000;
-
 // 最後のキー入力時間
 unsigned long lastKeyInput = 0;
-constexpr float toneCtrlKey = 2000;
-constexpr float toneAltKey = 2100;
-constexpr float toneShiftKey = 2200;
-constexpr float toneOptKey = 2300;
-constexpr float toneFnKey = 2400;
 
 // 直前に有効になっているモディファイアキー
 static uint8_t currentModifiers = 0;
+
+// Display active BLE modifiers on line 3
+static String activeBleMods = "";
 
 void checkBattery()
 {
   if (millis() > keyInputTimeout + lastKeyInput)
   {
-    M5Cardputer.Speaker.tone(1000, 100);
-    delay(1000);
+    dispSleepTime();
     M5.Power.deepSleep(0, false);
   }
+}
+
+void dispSleepTime()
+{
+  dispLx(1, "");
+  dispLx(2, "");
+  dispLx(3, "SLEEP TIME");
+  dispLx(4, "");
+  dispLx(5, "");
+  delay(1000);
+
+  dispLx(3, "");
+  delay(500);
+
+  dispLx(3, "SLEEP TIME");
+  delay(1000);
 }
 
 void notifyConnection()
@@ -42,82 +69,55 @@ void notifyConnection()
   if (bleKey.isConnected() && !connected)
   {
     connected = true;
-    M5Cardputer.Speaker.tone(2000, 100);
-    delay(100);
-    M5Cardputer.Speaker.tone(2300, 100);
+    dispBleInfo(true);
   }
   else if (!bleKey.isConnected() && connected)
   {
     connected = false;
-    M5Cardputer.Speaker.tone(2300, 100);
-    delay(100);
-    M5Cardputer.Speaker.tone(2000, 100);
+    dispBleInfo(false);
   }
 }
 
 void keySend(m5::Keyboard_Class::KeysState key)
 {
-  // タイムアウト内にキー入力したよ。
   lastKeyInput = millis();
-
-  // Store the state of physically pressed modifiers for this event
   uint8_t physicalModifiersThisEvent = key.modifiers;
 
-  // Fnキーが押されている場合の特殊処理
+  // --- [fn] + arrow_key ----------
   if (key.fn)
   {
-    for (char k_char : key.word) // key.word は std::vector<char> なので range-based for が使えます
+    for (char k_char : key.word)
     {
       if (k_char == ';')
       {
-        // M5Cardputer.Speaker.tone(toneFnKey, 50); // Fnキーの音（短く）
-        // M5Cardputer.Speaker.tone(1500, 70);      // UP_ARROWに対応する音（例：少し高めの音）
-        bleKey.write(KEY_UP_ARROW); // KEY_UP_ARROW (BleKeyboard.hで定義) を送信
-        Serial.println("Fn + ; -> UP_ARROW sent");
-        dispLx(3, "Fn+; -> UP"); // 画面の3行目に情報を表示
-
-        if (currentModifiers)
-        {
-          bleKey.releaseAll();
-          currentModifiers = 0;
-        }
-        return; // このキーイベントの処理を終了
+        bleKey.write(KEY_UP_ARROW);
+        arrow_key_index = 0;
       }
       else if (k_char == '.')
-      {                               // DOWN_ARROW
+      { // DOWN_ARROW
         bleKey.write(KEY_DOWN_ARROW);
-        Serial.println("Fn + . -> DOWN_ARROW sent");
-        dispLx(3, "Fn+; -> DOWN"); // 画面の3行目に情報を表示
-
-        if (currentModifiers)
-        {
-          bleKey.releaseAll();
-          currentModifiers = 0;
-        }
-        return; // このキーイベントの処理を終了
+        arrow_key_index = 1;
       }
       else if (k_char == ',')
-      {                               // LEFT_ARROW
+      { // LEFT_ARROW
         bleKey.write(KEY_LEFT_ARROW);
-        Serial.println("Fn + , -> LEFT_ARROW sent");
-        dispLx(3, "Fn+; -> LEFT"); // 画面の3行目に情報を表示
-        if (currentModifiers)
-        {
-          bleKey.releaseAll();
-          currentModifiers = 0;
-        }
-        return; // このキーイベントの処理を終了
+        arrow_key_index = 2;
       }
       else if (k_char == '/')
-      {                                // RIGHT_ARROW
+      { // RIGHT_ARROW
         bleKey.write(KEY_RIGHT_ARROW);
-        Serial.println("Fn + / -> RIGHT_ARROW sent");
-        dispLx(3, "Fn+; -> RIGHT"); // 画面の3行目に情報を表示
+        arrow_key_index = 3;
+      }
+
+      if (arrow_key_index >= 0 && arrow_key_index <= 3)
+      {
+        dispKey(arrow_key[arrow_key_index]);
         if (currentModifiers)
         {
           bleKey.releaseAll();
           currentModifiers = 0;
         }
+        arrow_key_index = -1;
         return;
       }
     }
@@ -129,96 +129,78 @@ void keySend(m5::Keyboard_Class::KeysState key)
   if (physicalModifiersThisEvent) // If Ctrl, Shift, or Alt are physically pressed in this event
   {
     currentModifiers = physicalModifiersThisEvent; // Set them as active for BLE for this key event
-    Serial.println("Physical Modifiers active this event: " + String(currentModifiers, HEX));
-    dispLx(1, "Mods: " + String(currentModifiers, HEX)); // Display physical modifiers
-    if (key.alt)
-    {
-      M5Cardputer.Speaker.tone(toneAltKey, 100);
-    }
-    else if (key.ctrl)
-    {
-      M5Cardputer.Speaker.tone(toneCtrlKey, 100);
-    }
-    else if (key.shift)
-    {
-      M5Cardputer.Speaker.tone(toneShiftKey, 100);
-    }
-  } else if (!key.word.empty() || !key.del || !key.enter || !key.tab) {
+  }
+  else if (!key.word.empty() || !key.del || !key.enter || !key.tab)
+  {
     // No physical Ctrl, Shift, Alt pressed in *this* event,
     // but other keys might be pressed. `currentModifiers` might hold state
     // from a *previous* modifier-only press.
     // If no character/action key is pressed either, `currentModifiers` will be cleared later
     // by the keyInput() function when all keys are released.
-    dispLx(1, ""); // Clear physical modifier display line if no physical mods in this event
   }
 
   // --- Action and Character Key Processing ---
-  bool characterOrActionSent = false; // Flag to track if a character/action key was sent
+  bool characterOrActionSent = false;
+  // Flag to track if a character/action key was sent
+  
   if (!key.word.empty() || key.del || key.enter || key.tab) // Check if there's a non-modifier key to send
   {
     if (currentModifiers)
     {
+      activeBleMods = "";
+
       if (currentModifiers & 0b0001)
       {
         bleKey.press(KEY_LEFT_CTRL);
-        Serial.println("Ctrl");
+        activeBleMods += "Ctrl ";
       }
       if (currentModifiers & 0b0010)
       {
         bleKey.press(KEY_LEFT_SHIFT);
-        Serial.println("Shift");
+        activeBleMods += "Shift ";
       }
       if (currentModifiers & 0b0100)
       {
         bleKey.press(KEY_LEFT_ALT);
-        Serial.println("Alt");
-      }
-      // Display active BLE modifiers on line 2
-      String activeBleMods = "";
-      if(currentModifiers & 0b0001) activeBleMods += "Ctrl ";
-      if(currentModifiers & 0b0010) activeBleMods += "Shift ";
-      if(currentModifiers & 0b0100) activeBleMods += "Alt ";
-      
-      if (!activeBleMods.isEmpty()) {
-        dispLx(2, activeBleMods);
+        activeBleMods += "Alt ";
       }
     }
 
+    // -- Special keys (BACKSPACE/ENTER/TAB) -----------
     if (key.del)
     {
       bleKey.write(KEY_BACKSPACE);
-      Serial.println("backSpace = " + String(KEY_BACKSPACE, HEX));
-      dispLx(3, "backSpace");
-      M5Cardputer.Speaker.tone(3000, 5);
+      dispKey("BackSpace : 0x" + String(KEY_BACKSPACE, HEX));
       characterOrActionSent = true;
     }
-
     if (key.enter)
     {
       bleKey.write(KEY_RETURN);
-      Serial.println("enter = " + String(KEY_RETURN, HEX));
-      dispLx(3, "Return");
-      M5Cardputer.Speaker.tone(4000, 5);
+      dispKey("Enter : 0x" + String(KEY_RETURN, HEX));
       characterOrActionSent = true;
     }
-
     if (key.tab)
     {
       bleKey.write(KEY_TAB);
-      Serial.println("tab = " + String(KEY_TAB, HEX));
-      dispLx(3, "Tab");
-      M5Cardputer.Speaker.tone(3000, 5);
+      dispKey("Tab : 0x" + String(KEY_TAB, HEX));
       characterOrActionSent = true;
     }
 
     // 普通の文字
     for (auto i : key.word)
     {
+      if (!activeBleMods.isEmpty())
+      {
+        dispLx(3, activeBleMods);
+        activeBleMods = "";
+      }
+      else
+      {
+        dispLx(3, "");
+      }
+
       bleKey.write(i);
-      // charSend(i, keyboardMode, srMode);
-      Serial.println("i = " + String(i, HEX));
-      dispLx(4, String(i));
-      M5Cardputer.Speaker.tone(4000, 5);
+      dispKey(String(i) + " : 0x" + String(i, HEX));
       characterOrActionSent = true;
     }
 
@@ -228,16 +210,19 @@ void keySend(m5::Keyboard_Class::KeysState key)
     {
       bleKey.releaseAll();
       currentModifiers = 0;
-      dispLx(2, ""); // Clear active BLE modifier display
-    } else if (!characterOrActionSent && physicalModifiersThisEvent == 0 && currentModifiers != 0) {
+    }
+    else if (!characterOrActionSent && physicalModifiersThisEvent == 0 && currentModifiers != 0)
+    {
       // This case is tricky: no char/action sent, no physical mods NOW, but currentModifiers was set.
       // This implies a modifier was pressed alone, then released alone.
       // The release is handled by keyInput() when isPressed() becomes false.
     }
-  } else if (physicalModifiersThisEvent == 0 && currentModifiers != 0) {
-      // Only modifier keys were involved, and now they are not physically pressed.
-      // The actual release of these modifiers from BLE will be handled by keyInput()
-      // when M5Cardputer.Keyboard.isPressed() becomes false.
+  }
+  else if (physicalModifiersThisEvent == 0 && currentModifiers != 0)
+  {
+    // Only modifier keys were involved, and now they are not physically pressed.
+    // The actual release of these modifiers from BLE will be handled by keyInput()
+    // when M5Cardputer.Keyboard.isPressed() becomes false.
   }
 }
 
@@ -249,46 +234,74 @@ void keyInput()
     {
       m5::Keyboard_Class::KeysState keys_status = M5Cardputer.Keyboard.keysState();
       keySend(keys_status);
-    } else {
+    }
+    else
+    {
       // All keys have been released physically on the Cardputer
-      if (currentModifiers) { // If any modifiers were virtually held by BLE
-        bleKey.releaseAll();    // Release them from the BLE host
-        currentModifiers = 0;   // Clear our record of active BLE modifiers
-        Serial.println("All keys released, clearing BLE modifiers.");
-        dispLx(1, ""); // Clear physical modifier display area
-        dispLx(2, ""); // Clear BLE active modifier display area
+      if (currentModifiers)
+      {                       // If any modifiers were virtually held by BLE
+        bleKey.releaseAll();  // Release them from the BLE host
+        currentModifiers = 0; // Clear our record of active BLE modifiers
       }
     }
   }
 }
 
-#define H_CHR 20 // character height
+#define H_CHR 22 // 1 line height
 void dispLx(uint8_t Lx, String msg)
 {
+  //---   Lx is (1 to 5) -----------
+  // L0   - app title -
+  // L1   BLE connect info [GREEN]
+  // L2    ---
+  // L3   (ctrl/shift/alt) [WHITE]
+  // L4    ---
+  // L5   Keys-- char/(tab/enter/del)/(up/down/left/right) [YELLOW]
+  if (Lx < 1 || Lx > 5)
+    return;
+
   M5Cardputer.Display.fillRect(0, Lx * H_CHR, M5Cardputer.Display.width(), (Lx + 1) * H_CHR, TFT_BLACK);
-  M5Cardputer.Display.setCursor(20, Lx * H_CHR);
+  M5Cardputer.Display.setCursor(30, Lx * H_CHR);
   M5Cardputer.Display.print(msg);
+}
+
+void dispBleInfo(bool connected)
+{
+  if (connected)
+  {
+    M5Cardputer.Display.setTextColor(TFT_GREEN, TFT_BLACK);
+    dispLx(1, "BLE connected");
+  }
+  else
+  {
+    M5Cardputer.Display.setTextColor(TFT_RED, TFT_BLACK);
+    dispLx(1, "BLE disconnected");
+  }
+  M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+}
+
+void dispKey(String msg)
+{
+  M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
+  dispLx(5, msg);
+  M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
 }
 
 void setup()
 {
-  auto cfg = M5.config();
-  cfg.serial_baudrate = 115200;
-  cfg.internal_imu = false;
-  cfg.internal_mic = false;
-  cfg.output_power = false;
-  cfg.led_brightness = 0;
-  M5Cardputer.begin(cfg, true);
+  m5stack_begin();
+
+  if (SD_ENABLE)
+    SDU_lobby();
+
   lastKeyInput = millis();
-  M5Cardputer.Speaker.setVolume(0);
   bleKey.begin();
-  delay(5000);
+  delay(3000);
   disp_init();
 
-  Serial.println("Hello Tiny keyboard.");
   Serial.println(lastKeyInput);
   // M5Cardputer.Speaker.setVolume(25);
-  M5Cardputer.Speaker.tone(2000, 100);
+  // M5Cardputer.Speaker.tone(2000, 100);
 }
 
 void loop()
@@ -298,7 +311,7 @@ void loop()
   notifyConnection();
   keyInput();
 
-  // checkBattery();
+  checkBattery();
   delay(20);
 }
 
@@ -313,19 +326,73 @@ void disp_init()
   M5Cardputer.Display.setTextDatum(top_left); // 文字の基準位置
   M5Cardputer.Display.setTextWrap(false);
   M5Cardputer.Display.setCursor(0, 0);
-  prt("- " + PROG_NAME + " -");
+  M5Cardputer.Display.println("- " + PROG_NAME + " -");
 }
 
-void prt(String message)
+void m5stack_begin()
 {
-  Serial.println(message);
+  auto cfg = M5.config();
+  cfg.serial_baudrate = 115200;
+  cfg.internal_imu = false;
+  cfg.internal_mic = false;
+  cfg.output_power = false;
+  cfg.led_brightness = 0;
+  M5Cardputer.begin(cfg, true);
 
-  if (DISP_ON)
+  M5Cardputer.Speaker.setVolume(0);
+
+  // initial display setup
+  M5Cardputer.Display.setBrightness(70);
+  M5Cardputer.Display.setRotation(1);
+  M5Cardputer.Display.fillScreen(TFT_BLACK);
+  M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5Cardputer.Display.setFont(&fonts::Font0);
+  M5Cardputer.Display.setTextSize(2);
+  M5Cardputer.Display.setTextWrap(false);
+  M5Cardputer.Display.setCursor(0, 0);
+
+  SPI2.begin(
+      M5.getPin(m5::pin_name_t::sd_spi_sclk),
+      M5.getPin(m5::pin_name_t::sd_spi_miso),
+      M5.getPin(m5::pin_name_t::sd_spi_mosi),
+      M5.getPin(m5::pin_name_t::sd_spi_ss));
+
+  SD_ENABLE = SD_begin();
+}
+
+// ------------------------------------------
+// SDU_lobby : SD_uploader lobby
+// ------------------------------------------
+// load "/menu.bin" on SD
+//    if 'a' pressed at booting
+// ------------------------------------------
+void SDU_lobby()
+{
+  M5Cardputer.update();
+  if (M5Cardputer.Keyboard.isKeyPressed('a'))
   {
-#ifdef CARDPUTER
-    M5Cardputer.Display.println(message);
-#else
-    M5.Display.println(message);
-#endif
+    updateFromFS(SD, "/menu.bin");
+    ESP.restart();
+
+    while (true)
+      ;
   }
+}
+
+bool SD_begin()
+{
+  int i = 0;
+  while (!SD.begin(M5.getPin(m5::pin_name_t::sd_spi_ss), SPI2) && i < 10)
+  {
+    delay(500);
+    i++;
+  }
+
+  if (i >= 10)
+  {
+    Serial.println("ERR: SD begin erro...");
+    return false;
+  }
+
+  return true;
 }
