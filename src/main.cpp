@@ -5,38 +5,31 @@
 #include <M5StackUpdater.h>
 #include <map>
 
+void checkBattery();
+void notifyConnection();
+void keySend(m5::Keyboard_Class::KeysState key);
+void keyInput();
+void dispKey(String msg);
+void dispLx(uint8_t Lx, String msg);
+void dispBleInfo(bool connected);
+void dispSleepTime();
 void disp_init();
 void m5stack_begin();
 void SDU_lobby();
 bool SD_begin();
-void dispKey(String msg);
-void dispLx(uint8_t Lx, String msg);
-void dispBleInfo(bool connected);
 
 String PROG_NAME = "Tiny bleKeyboard";
 bool SD_ENABLE;
 SPIClass SPI2;
 bool DISP_ON = true;
-void checkBattery();
-void notifyConnection();
-void keySend(m5::Keyboard_Class::KeysState key);
-void keyInput();
-void dispSleepTime();
 String const arrow_key[] = {"up_arrow", "down_arrow", "left_arrow", "right_arrow"};
 int arrow_key_index = -1;
-// BLECharacteristic *keyboardInput;
+
 BleKeyboard bleKey;
-
-// ３分間キー入力がなければスリープ
-const unsigned int keyInputTimeout = 180000;
-// 最後のキー入力時間
+const unsigned long keyInputTimeout = 10 * 60 * 1000L; // (ms) wait for sleep
 unsigned long lastKeyInput = 0;
-
-// 直前に有効になっているモディファイアキー
 static uint8_t currentModifiers = 0;
-
-// Display active BLE modifiers on line 3
-static String activeBleMods = "";
+static String activeBleMods = ""; // Display active BLE modifiers on line 3
 
 void checkBattery()
 {
@@ -142,7 +135,7 @@ void keySend(m5::Keyboard_Class::KeysState key)
   // --- Action and Character Key Processing ---
   bool characterOrActionSent = false;
   // Flag to track if a character/action key was sent
-  
+
   if (!key.word.empty() || key.del || key.enter || key.tab) // Check if there's a non-modifier key to send
   {
     if (currentModifiers)
@@ -290,27 +283,19 @@ void dispKey(String msg)
 void setup()
 {
   m5stack_begin();
-
   if (SD_ENABLE)
     SDU_lobby();
 
-  lastKeyInput = millis();
-  bleKey.begin();
-  delay(3000);
   disp_init();
-
-  Serial.println(lastKeyInput);
-  // M5Cardputer.Speaker.setVolume(25);
-  // M5Cardputer.Speaker.tone(2000, 100);
+  bleKey.begin();
+  lastKeyInput = millis();
 }
 
 void loop()
 {
   M5Cardputer.update();
-
   notifyConnection();
   keyInput();
-
   checkBattery();
   delay(20);
 }
@@ -338,7 +323,6 @@ void m5stack_begin()
   cfg.output_power = false;
   cfg.led_brightness = 0;
   M5Cardputer.begin(cfg, true);
-
   M5Cardputer.Speaker.setVolume(0);
 
   // initial display setup
@@ -387,12 +371,10 @@ bool SD_begin()
     delay(500);
     i++;
   }
-
   if (i >= 10)
   {
     Serial.println("ERR: SD begin erro...");
     return false;
   }
-
   return true;
 }
