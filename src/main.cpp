@@ -12,11 +12,12 @@ void keyInput();
 void dispKey(String msg);
 void dispLx(uint8_t Lx, String msg);
 void dispBleInfo(bool connected);
-void dispSleepTime();
+void dispPowerOff();
 void disp_init();
 void m5stack_begin();
 void SDU_lobby();
 bool SD_begin();
+void POWER_OFF();
 
 String PROG_NAME = "Tiny bleKeyboard";
 bool SD_ENABLE;
@@ -26,19 +27,19 @@ String const arrow_key[] = {"up_arrow", "down_arrow", "left_arrow", "right_arrow
 int useFnKeyIndex = -1;
 
 BleKeyboard bleKey;
-const unsigned long keyInputTimeout = 10 * 60 * 1000L; // (ms) wait for SLEEP TIME
 unsigned long lastKeyInput = 0;
+const unsigned long keyInputTimeout = 3 * 60 * 1000L; //  ms: wait for SLEEP
+const unsigned long WARN_TM = 30 * 1000L;             // ms: warning for SLEEP
 static uint8_t currentModifiers = 0;
 static String activeBleMods = ""; // Display active BLE modifiers on line 3
-
-#define WARN_TM 30 * 1000L // warning display for sleep time
 static bool toggleFG = true;
+
 void checkSleepTime()
 {
   if (millis() > keyInputTimeout + lastKeyInput)
   {
-    dispSleepTime();
-    M5.Power.deepSleep(0, false);
+    dispPowerOff();
+    POWER_OFF();
   }
   else if (millis() > keyInputTimeout + lastKeyInput - WARN_TM)
   {
@@ -59,15 +60,15 @@ void checkSleepTime()
   }
 }
 
-void dispSleepTime()
+void dispPowerOff()
 {
   dispLx(1, "");
   dispLx(2, "");
   M5Cardputer.Display.setTextColor(TFT_RED, TFT_BLACK);
-  dispLx(3, "  SLEEP TIME");
+  dispLx(3, "  POWER OFF");
   dispLx(4, "");
   dispLx(5, "");
-  delay(3000);
+  delay(5000);
 }
 
 void notifyConnection()
@@ -93,6 +94,8 @@ void keySend(m5::Keyboard_Class::KeysState key)
   // --- [fn] + arrow_key ----------
   if (key.fn)
   {
+    // dispLx(3, "fn");
+
     for (char k_char : key.word)
     {
       if (k_char == ';')
@@ -115,21 +118,15 @@ void keySend(m5::Keyboard_Class::KeysState key)
         bleKey.write(KEY_RIGHT_ARROW);
         useFnKeyIndex = 3;
       }
-
       else if (k_char == '`')
       { // ESC
         bleKey.write(KEY_ESC);
         useFnKeyIndex = 4;
       }
-      // // else if (k_char ==KEY_BACKSPACE)
-      // else if (key.del)
-      // { // DELETE
-      //   bleKey.write(KEY_DELETE);
-      //   useFnKeyIndex = 5;
-      // }
 
       if (useFnKeyIndex >= 0 && useFnKeyIndex <= 4)
       {
+        dispLx(3, "");
         dispKey(arrow_key[useFnKeyIndex]);
         if (currentModifiers)
         {
@@ -142,6 +139,48 @@ void keySend(m5::Keyboard_Class::KeysState key)
     }
   }
 
+  // -- Special keys (BACKSPACE/ENTER/TAB) -----------
+  bool useSpecialKeys = false;
+  if (key.del)
+  {
+    if (key.fn)
+    {
+      bleKey.write(KEY_DELETE);
+      dispKey("Delete : 0x" + String(KEY_DELETE, HEX));
+    }
+    else
+    {
+      bleKey.write(KEY_BACKSPACE);
+      dispKey("Backspae : 0x" + String(KEY_BACKSPACE, HEX));
+    }
+    useSpecialKeys = true;
+  }
+  if (key.enter)
+  {
+    bleKey.write(KEY_RETURN);
+    dispKey("Enter : 0x" + String(KEY_RETURN, HEX));
+    useSpecialKeys = true;
+  }
+  if (key.tab)
+  {
+    bleKey.write(KEY_TAB);
+    dispKey("Tab : 0x" + String(KEY_TAB, HEX));
+    useSpecialKeys = true;
+  }
+  if (key.opt)
+  {
+    bleKey.press(KEY_LEFT_GUI);
+    dispKey("Opt : 0x" + String(KEY_LEFT_GUI, HEX));
+    useSpecialKeys = true;
+  }
+  if (useSpecialKeys)
+  {
+    bleKey.releaseAll();
+    currentModifiers = 0;
+    useSpecialKeys = false;
+    return;
+  }
+  
   // --- Modifier Key Processing ---
   // This section handles the state of Ctrl, Shift, Alt based on physical key presses.
   // It updates `currentModifiers` which reflects modifiers intended to be active for BLE transmission.
@@ -162,7 +201,9 @@ void keySend(m5::Keyboard_Class::KeysState key)
   bool characterOrActionSent = false;
   // Flag to track if a character/action key was sent
 
-  if (!key.word.empty() || key.del || key.enter || key.tab) // Check if there's a non-modifier key to send
+  // **********************************
+  // Check if there's a non-modifier key to send
+  if (!key.word.empty() || key.ctrl || key.shift || key.alt)
   {
     if (currentModifiers)
     {
@@ -170,48 +211,59 @@ void keySend(m5::Keyboard_Class::KeysState key)
 
       if (currentModifiers & 0b0001)
       {
+        dispLx(3, "Ctrl");
         bleKey.press(KEY_LEFT_CTRL);
         activeBleMods += "Ctrl ";
       }
       if (currentModifiers & 0b0010)
       {
+        dispLx(3, "Shift");
         bleKey.press(KEY_LEFT_SHIFT);
         activeBleMods += "Shift ";
       }
       if (currentModifiers & 0b0100)
       {
+        dispLx(3, "Alt");
         bleKey.press(KEY_LEFT_ALT);
         activeBleMods += "Alt ";
       }
     }
+    // **********************************
 
-    // -- Special keys (BACKSPACE/ENTER/TAB) -----------
-    if (key.del)
-    {
-      if (key.fn)
-      {
-        bleKey.write(KEY_DELETE);
-        dispKey("Delete : 0x" + String(KEY_DELETE, HEX));
-      }
-      else
-      {
-        bleKey.write(KEY_BACKSPACE);
-        dispKey("Backspae : 0x" + String(KEY_BACKSPACE, HEX));
-      }
-      characterOrActionSent = true;
-    }
-    if (key.enter)
-    {
-      bleKey.write(KEY_RETURN);
-      dispKey("Enter : 0x" + String(KEY_RETURN, HEX));
-      characterOrActionSent = true;
-    }
-    if (key.tab)
-    {
-      bleKey.write(KEY_TAB);
-      dispKey("Tab : 0x" + String(KEY_TAB, HEX));
-      characterOrActionSent = true;
-    }
+    // // -- Special keys (BACKSPACE/ENTER/TAB) -----------
+    // if (key.del)
+    // {
+    //   if (key.fn)
+    //   {
+    //     bleKey.write(KEY_DELETE);
+    //     dispKey("Delete : 0x" + String(KEY_DELETE, HEX));
+    //   }
+    //   else
+    //   {
+    //     bleKey.write(KEY_BACKSPACE);
+    //     dispKey("Backspae : 0x" + String(KEY_BACKSPACE, HEX));
+    //   }
+    //   characterOrActionSent = true;
+    // }
+    // if (key.enter)
+    // {
+    //   bleKey.write(KEY_RETURN);
+    //   dispKey("Enter : 0x" + String(KEY_RETURN, HEX));
+    //   characterOrActionSent = true;
+    // }
+    // if (key.tab)
+    // {
+    //   bleKey.write(KEY_TAB);
+    //   dispKey("Tab : 0x" + String(KEY_TAB, HEX));
+    //   characterOrActionSent = true;
+    // }
+
+    // if (key.opt)
+    // {
+    //   bleKey.press(KEY_LEFT_GUI);
+    //   dispKey("Opt : 0x" + String(KEY_LEFT_GUI, HEX));
+    //   characterOrActionSent = true;
+    // }
 
     // 普通の文字
     for (auto i : key.word)
@@ -258,6 +310,7 @@ void keyInput()
   if (M5Cardputer.Keyboard.isChange())
   {
     lastKeyInput = millis();
+
     if (M5Cardputer.Keyboard.isPressed())
     {
       m5::Keyboard_Class::KeysState keys_status = M5Cardputer.Keyboard.keysState();
@@ -321,8 +374,9 @@ void setup()
   if (SD_ENABLE)
     SDU_lobby();
 
-  disp_init();
   bleKey.begin();
+  disp_init();
+  dispBleInfo(false);
   lastKeyInput = millis();
 }
 
@@ -412,4 +466,18 @@ bool SD_begin()
     return false;
   }
   return true;
+}
+
+void POWER_OFF()
+{
+  Serial.println(" *** POWER OFF ***");
+
+  SD.end();
+  delay(2 * 1000L);
+  M5.Power.powerOff();
+
+  for (;;)
+  { // never
+    delay(1000);
+  }
 }
