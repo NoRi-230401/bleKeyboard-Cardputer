@@ -12,13 +12,15 @@ void keySend(m5::Keyboard_Class::KeysState key);
 void keyInput();
 void dispKey(String msg);
 void dispLx(uint8_t Lx, String msg);
-void dispBleInfo(bool connected);
+// void dispBleInfo(bool connected);
 void dispPowerOff();
-void disp_init();
+void dispInit();
 void m5stack_begin();
 void SDU_lobby();
 bool SD_begin();
 void POWER_OFF();
+void dispState();
+void dispStateInit();
 
 String PROG_NAME = "Tiny bleKeyboard";
 bool SD_ENABLE;
@@ -29,8 +31,8 @@ int useFnKeyIndex = -1;
 
 BleKeyboard bleKey;
 unsigned long lastKeyInput = 0;
-const unsigned long keyInputTimeout = 30 * 60 * 1000L; //  ms: wait for SLEEP
-const unsigned long WARN_TM = 30 * 1000L;              // ms: warning for SLEEP
+const unsigned long keyInputTimeout = 30 * 60 * 1000L; // ms: wait for SLEEP
+const unsigned long WARN_TM = 30 * 1000L;              // ms: warning time for SLEEP
 static String activeBleModsDisplay = "";               // Display active BLE modifiers on line 3
 static bool toggleFG = true;
 
@@ -71,27 +73,56 @@ void dispPowerOff()
   delay(5000);
 }
 
+static bool bleConnect = false;
+static bool capsLock = false;
+static bool cursorMode = false;
+
+const String L1Str =     "BLE f1:Caps f2:CurMd";
+const String bleL2[] = {" ng "," ok "};
+const String capsL2[] = {" unlock ", "  lock  "};
+const String cursorModeL2[] = {"   off  ", "  on    "};
+
+void dispState()
+{
+  String line2 = "";
+  line2 += bleL2[bleConnect ? 1 : 0];
+  line2 += capsL2[capsLock ?  1 : 0];
+  line2 += cursorModeL2[cursorMode ? 1 : 0];
+  dispLx(2, line2);
+}
+
+void dispStateInit()
+{
+  M5Cardputer.Display.setTextColor(TFT_GREEN, TFT_BLACK);
+  dispLx(1, L1Str);
+  M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  dispState();
+}
+
+
+
 void notifyConnection()
 {
-  static bool connected = false;
-  if (bleKey.isConnected() && !connected)
+  if (bleKey.isConnected() && !bleConnect)
   {
-    connected = true;
-    dispBleInfo(true);
+    bleConnect = true;
+    // dispBleInfo(true);
+    dispState();
   }
-  else if (!bleKey.isConnected() && connected)
+  else if (!bleKey.isConnected() && bleConnect)
   {
-    connected = false;
-    dispBleInfo(false);
+    bleConnect = false;
+    // dispBleInfo(false);
+    dispState();
   }
 }
 
-static bool capsLock = false;
-// m5::Keyboard_Class CP_key;
-static bool cursorMode = false;
+
+
 
 void keySend(m5::Keyboard_Class::KeysState key)
 {
+  // m5::Keyboard_Class CP_key;
 
   // --- [fn] Key Processing (High Priority) ---
   if (key.fn)
@@ -100,18 +131,22 @@ void keySend(m5::Keyboard_Class::KeysState key)
     if (std::find(key.word.begin(), key.word.end(), '1') != key.word.end())
     {
       capsLock = !capsLock;
-      bleKey.write(KEY_CAPS_LOCK); // Sends CAPS_LOCK press & release
-      dispLx(2, capsLock ? "capsLock ON" : "capsLock OFF");
+      // bleKey.write(KEY_CAPS_LOCK); // Sends CAPS_LOCK press & release
+      // CP_key.setCapsLocked(capsLock);
+
       bleKey.releaseAll(); // Release any other held modifiers
       useFnKeyIndex = -1;  // Reset display state
+      dispState();
       dispLx(3, "");       // Clear modifier display
       return;
     }
+
     // Cursor Mode Toggle (Fn + '2')
     if (std::find(key.word.begin(), key.word.end(), '2') != key.word.end())
     {
       cursorMode = !cursorMode;
-      dispLx(2, cursorMode ? "cursorMode ON" : "cursorMode OFF");
+      // dispLx(2, cursorMode ? "cursorMode ON" : "cursorMode OFF");
+      dispState();
       bleKey.releaseAll(); // Release any other held modifiers
       useFnKeyIndex = -1;
       dispLx(3, "");
@@ -172,18 +207,12 @@ void keySend(m5::Keyboard_Class::KeysState key)
 
   // --- Update BLE Modifier State (Ctrl, Shift, Alt, Opt/GUI) based on physical keys ---
   uint8_t physicalMods = key.modifiers;
-  // No longer need to get bleHostMods or use _BIT constants
   activeBleModsDisplay = "";
 
-  // keySend 関数の先頭あたりに追加
   if (!key.word.empty())
-  {
     Serial.printf("key.word[0]: %c (0x%X), physicalMods: 0x%X\n", key.word[0], key.word[0], physicalMods);
-  }
   else
-  {
     Serial.printf("key.word is empty, physicalMods: 0x%X\n", physicalMods);
-  }
 
   // CTRL
   if (physicalMods & 0b0001)
@@ -226,34 +255,18 @@ void keySend(m5::Keyboard_Class::KeysState key)
     bleKey.release(KEY_LEFT_GUI);
   }
 
-  // If activeBleModsDisplay is not empty, trim it in place.
-  // Then, pass the (possibly trimmed or originally empty) string to dispLx.
   if (!activeBleModsDisplay.isEmpty())
   {
-    activeBleModsDisplay.trim(); // Modifies activeBleModsDisplay in place
+    activeBleModsDisplay.trim();
   }
-  // After this, activeBleModsDisplay is either its original empty state, or the trimmed version.
   dispLx(3, activeBleModsDisplay);
   Serial.printf("Modifiers updated. Physical: 0x%X, Display: %s\n", physicalMods, activeBleModsDisplay.c_str());
 
-  // BleKeyboard.h で定義されている修飾キーのビットマスク定数 (T-vK/ESP32-BLE-Keyboard の標準的な値)
-  // これらの定数が実際に BleKeyboard.h でどのように定義されているか確認してください。
-  const uint8_t BLE_KEY_LEFT_CTRL_BIT_MASK = (1 << 0);  // 0x01
-  const uint8_t BLE_KEY_LEFT_SHIFT_BIT_MASK = (1 << 1); // 0x02
-  const uint8_t BLE_KEY_LEFT_ALT_BIT_MASK = (1 << 2);   // 0x04
-  const uint8_t BLE_KEY_LEFT_GUI_BIT_MASK = (1 << 3);   // 0x08
-  // const uint8_t BLE_KEY_RIGHT_CTRL_BIT_MASK  = (1 << 4); // 0x10 (今回は左のみ考慮)
-  // const uint8_t BLE_KEY_RIGHT_SHIFT_BIT_MASK = (1 << 5); // 0x20 (今回は左のみ考慮)
-  // const uint8_t BLE_KEY_RIGHT_ALT_BIT_MASK   = (1 << 6); // 0x40 (今回は左のみ考慮)
-  // const uint8_t BLE_KEY_RIGHT_GUI_BIT_MASK   = (1 << 7); // 0x80 (今回は左のみ考慮)
-
-  // --- Cursor Mode: Translate specific chars to arrow keys (if Fn not active) ---
   if (cursorMode)
   {
     bool arrowKeySentInCursorMode = false;
-    // key.word はShiftキーの影響を受けるため、key.word[0] と physicalMods を組み合わせて
-    // どの物理キーが押されたかを判断する。
-    if (!key.word.empty()) { // key.word が空でないことを確認
+    if (!key.word.empty())
+    {
       char first_char_in_word = key.word[0];
       uint8_t arrowKeyCode = 0;
       int tempDispIndex = -1;
@@ -295,19 +308,10 @@ void keySend(m5::Keyboard_Class::KeysState key)
       if (arrowKeyCode != 0)
       {
         Serial.printf("CursorMode: Sending arrow key 0x%X via sendReport. Physical Modifiers: 0x%X\n", arrowKeyCode, physicalMods);
-
-        // Fnキー処理と同様に bleKey.write() を試す
-        // この時点で bleKey.press(KEY_LEFT_SHIFT) などが physicalMods に基づいて
-        // 既に呼び出されているため、修飾キーは有効になっているはず。
         bleKey.write(arrowKeyCode);
-
-        // cursorMode の場合、Fnキー処理のように bleKey.releaseAll() は呼び出さない。
-        // Shiftキーなどの修飾キーは、物理的に離されるまで維持されるべき。
-        // bleKey.write() はキーのプレスとリリースを行うため、
-        // 矢印キーは単発で送信される。
-
         if (tempDispIndex != -1)
           dispKey(arrow_key[tempDispIndex]);
+
         arrowKeySentInCursorMode = true;
         return;
       }
@@ -338,6 +342,7 @@ void keySend(m5::Keyboard_Class::KeysState key)
   if (!key.word.empty())
   {
     bool char_sent_this_event = false;
+  
     for (char k_char : key.word)
     {
       bool handled_by_cursor_mode_already = false;
@@ -351,8 +356,16 @@ void keySend(m5::Keyboard_Class::KeysState key)
 
       if (!handled_by_cursor_mode_already)
       {
-        bleKey.write(k_char);
-        dispKey(String(k_char) + " : 0x" + String(k_char, HEX));
+        String ucharStr = String(k_char);
+        if(capsLock)
+        {
+          ucharStr.toUpperCase();
+        }
+        bleKey.write(ucharStr[0]);
+        dispKey(ucharStr + " : 0x" + String(ucharStr[0], HEX));
+
+        // bleKey.write(k_char);
+        // dispKey(String(k_char) + " : 0x" + String(k_char, HEX));
         char_sent_this_event = true;
       }
     }
@@ -401,25 +414,8 @@ void dispLx(uint8_t Lx, String msg)
     return;
 
   M5Cardputer.Display.fillRect(0, Lx * H_CHR, M5Cardputer.Display.width(), (Lx + 1) * H_CHR, TFT_BLACK);
-  M5Cardputer.Display.setCursor(30, Lx * H_CHR);
+  M5Cardputer.Display.setCursor(0, Lx * H_CHR);
   M5Cardputer.Display.print(msg);
-}
-
-void dispBleInfo(bool connected)
-{
-  const String BLE_INF[] = {"OFF", "ON"};
-
-  if (connected)
-  {
-    M5Cardputer.Display.setTextColor(TFT_GREEN, TFT_BLACK);
-    dispLx(1, "BLE connected");
-  }
-  else
-  {
-    M5Cardputer.Display.setTextColor(TFT_RED, TFT_BLACK);
-    dispLx(1, "BLE disconnected");
-  }
-  M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
 }
 
 void dispKey(String msg)
@@ -436,8 +432,10 @@ void setup()
     SDU_lobby();
 
   bleKey.begin();
-  disp_init();
-  dispBleInfo(false);
+
+  dispInit();
+  dispStateInit();
+
   lastKeyInput = millis();
   Serial.println("Cardputer Started!");
 }
@@ -451,7 +449,7 @@ void loop()
   delay(20);
 }
 
-void disp_init()
+void dispInit()
 {
   M5Cardputer.Display.setBrightness(70);
   M5Cardputer.Display.setRotation(1);
@@ -469,7 +467,6 @@ void disp_init()
 void m5stack_begin()
 {
   auto cfg = M5.config();
-  // M5Cardputer.begin(cfg, true); // M5.config()より先にM5Cardputer.begin()を呼ぶ必要がある場合があるため、念のため修正
   cfg.serial_baudrate = 115200; // シリアル通信速度
   cfg.internal_imu = false;     // IMU (加速度・ジャイロセンサー) を使用しない
   cfg.internal_mic = false;     // マイクを使用しない
@@ -497,6 +494,8 @@ void m5stack_begin()
   SD_ENABLE = SD_begin();
 
 #ifdef WAIT_SERIAL_SETTING_DONE
+// vsCode terminal cannot get serial data 
+//  of cardputer before 5 sec ...!
   delay(5000);
 #endif
   Serial.println("\n\n*** m5stack begin ***");
