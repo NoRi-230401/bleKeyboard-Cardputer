@@ -3,6 +3,7 @@
 #include <BleKeyboard.h>
 #include <M5Cardputer.h>
 #include <M5StackUpdater.h>
+#include <algorithm> // For std::find
 #include <map>
 
 void checkSleepTime();
@@ -23,15 +24,14 @@ String PROG_NAME = "Tiny bleKeyboard";
 bool SD_ENABLE;
 SPIClass SPI2;
 bool DISP_ON = true;
-String const arrow_key[] = {"up_arrow", "down_arrow", "left_arrow", "right_arrow", "Escape"};
+String const arrow_key[] = {"UpArrow", "DownArrow", "LeftArrow", "RightArrow", "Escape"}; // Display names
 int useFnKeyIndex = -1;
 
 BleKeyboard bleKey;
 unsigned long lastKeyInput = 0;
-const unsigned long keyInputTimeout = 3 * 60 * 1000L; //  ms: wait for SLEEP
-const unsigned long WARN_TM = 30 * 1000L;             // ms: warning for SLEEP
-static uint8_t currentModifiers = 0;
-static String activeBleMods = ""; // Display active BLE modifiers on line 3
+const unsigned long keyInputTimeout = 30 * 60 * 1000L; //  ms: wait for SLEEP
+const unsigned long WARN_TM = 30 * 1000L;              // ms: warning for SLEEP
+static String activeBleModsDisplay = "";               // Display active BLE modifiers on line 3
 static bool toggleFG = true;
 
 void checkSleepTime()
@@ -86,222 +86,280 @@ void notifyConnection()
   }
 }
 
+static bool capsLock = false;
+// m5::Keyboard_Class CP_key;
+static bool cursorMode = false;
+
 void keySend(m5::Keyboard_Class::KeysState key)
 {
-  // lastKeyInput = millis();
-  uint8_t physicalModifiersThisEvent = key.modifiers;
 
-  // --- [fn] + arrow_key ----------
+  // --- [fn] Key Processing (High Priority) ---
   if (key.fn)
   {
-    // dispLx(3, "fn");
-
-    for (char k_char : key.word)
+    // Caps Lock Toggle (Fn + '1')
+    if (std::find(key.word.begin(), key.word.end(), '1') != key.word.end())
     {
-      if (k_char == ';')
-      {
-        bleKey.write(KEY_UP_ARROW);
-        useFnKeyIndex = 0;
-      }
-      else if (k_char == '.')
-      { // DOWN_ARROW
-        bleKey.write(KEY_DOWN_ARROW);
-        useFnKeyIndex = 1;
-      }
-      else if (k_char == ',')
-      { // LEFT_ARROW
-        bleKey.write(KEY_LEFT_ARROW);
-        useFnKeyIndex = 2;
-      }
-      else if (k_char == '/')
-      { // RIGHT_ARROW
-        bleKey.write(KEY_RIGHT_ARROW);
-        useFnKeyIndex = 3;
-      }
-      else if (k_char == '`')
-      { // ESC
-        bleKey.write(KEY_ESC);
-        useFnKeyIndex = 4;
-      }
+      capsLock = !capsLock;
+      bleKey.write(KEY_CAPS_LOCK); // Sends CAPS_LOCK press & release
+      dispLx(2, capsLock ? "capsLock ON" : "capsLock OFF");
+      bleKey.releaseAll(); // Release any other held modifiers
+      useFnKeyIndex = -1;  // Reset display state
+      dispLx(3, "");       // Clear modifier display
+      return;
+    }
+    // Cursor Mode Toggle (Fn + '2')
+    if (std::find(key.word.begin(), key.word.end(), '2') != key.word.end())
+    {
+      cursorMode = !cursorMode;
+      dispLx(2, cursorMode ? "cursorMode ON" : "cursorMode OFF");
+      bleKey.releaseAll(); // Release any other held modifiers
+      useFnKeyIndex = -1;
+      dispLx(3, "");
+      return;
+    }
 
-      if (useFnKeyIndex >= 0 && useFnKeyIndex <= 4)
+    // Fn + Arrow Keys (';', '.', ',', '/', '`')
+    uint8_t fnKeyAction = 0;
+    int tempFnKeyIndex = -1;
+    if (std::find(key.word.begin(), key.word.end(), ';') != key.word.end())
+    {
+      fnKeyAction = KEY_UP_ARROW;
+      tempFnKeyIndex = 0;
+    }
+    else if (std::find(key.word.begin(), key.word.end(), '.') != key.word.end())
+    {
+      fnKeyAction = KEY_DOWN_ARROW;
+      tempFnKeyIndex = 1;
+    }
+    else if (std::find(key.word.begin(), key.word.end(), ',') != key.word.end())
+    {
+      fnKeyAction = KEY_LEFT_ARROW;
+      tempFnKeyIndex = 2;
+    }
+    else if (std::find(key.word.begin(), key.word.end(), '/') != key.word.end())
+    {
+      fnKeyAction = KEY_RIGHT_ARROW;
+      tempFnKeyIndex = 3;
+    }
+    else if (std::find(key.word.begin(), key.word.end(), '`') != key.word.end())
+    {
+      fnKeyAction = KEY_ESC;
+      tempFnKeyIndex = 4;
+    }
+
+    if (fnKeyAction != 0)
+    {
+      bleKey.write(fnKeyAction);
+      dispLx(3, "");
+      if (tempFnKeyIndex != -1)
+        dispKey(arrow_key[tempFnKeyIndex]);
+      // else dispKey("Esc"); // Already handled by arrow_key array for index 4
+
+      bleKey.releaseAll();
+      useFnKeyIndex = -1;
+      return;
+    }
+
+    // Fn + Del for KEY_DELETE
+    if (key.del)
+    {
+      bleKey.write(KEY_DELETE);
+      dispKey("Delete : 0x" + String(KEY_DELETE, HEX));
+      bleKey.releaseAll();
+      return;
+    }
+  }
+
+  // --- Update BLE Modifier State (Ctrl, Shift, Alt, Opt/GUI) based on physical keys ---
+  uint8_t physicalMods = key.modifiers;
+  // No longer need to get bleHostMods or use _BIT constants
+  activeBleModsDisplay = "";
+
+  // keySend 関数の先頭あたりに追加
+  if (!key.word.empty())
+  {
+    Serial.printf("key.word[0]: %c (0x%X), physicalMods: 0x%X\n", key.word[0], key.word[0], physicalMods);
+  }
+  else
+  {
+    Serial.printf("key.word is empty, physicalMods: 0x%X\n", physicalMods);
+  }
+
+  // CTRL
+  if (physicalMods & 0b0001)
+  {
+    bleKey.press(KEY_LEFT_CTRL);
+    activeBleModsDisplay += "Ctrl ";
+  }
+  else
+  {
+    bleKey.release(KEY_LEFT_CTRL);
+  }
+  // SHIFT
+  if (physicalMods & 0b0010)
+  {
+    bleKey.press(KEY_LEFT_SHIFT);
+    activeBleModsDisplay += "Shift ";
+  }
+  else
+  {
+    bleKey.release(KEY_LEFT_SHIFT);
+  }
+  // ALT
+  if (physicalMods & 0b0100)
+  {
+    bleKey.press(KEY_LEFT_ALT);
+    activeBleModsDisplay += "Alt ";
+  }
+  else
+  {
+    bleKey.release(KEY_LEFT_ALT);
+  }
+  // OPT (GUI Key)
+  if (key.opt)
+  {
+    bleKey.press(KEY_LEFT_GUI);
+    activeBleModsDisplay += "Opt ";
+  }
+  else
+  {
+    bleKey.release(KEY_LEFT_GUI);
+  }
+
+  // If activeBleModsDisplay is not empty, trim it in place.
+  // Then, pass the (possibly trimmed or originally empty) string to dispLx.
+  if (!activeBleModsDisplay.isEmpty())
+  {
+    activeBleModsDisplay.trim(); // Modifies activeBleModsDisplay in place
+  }
+  // After this, activeBleModsDisplay is either its original empty state, or the trimmed version.
+  dispLx(3, activeBleModsDisplay);
+  Serial.printf("Modifiers updated. Physical: 0x%X, Display: %s\n", physicalMods, activeBleModsDisplay.c_str());
+
+  // BleKeyboard.h で定義されている修飾キーのビットマスク定数 (T-vK/ESP32-BLE-Keyboard の標準的な値)
+  // これらの定数が実際に BleKeyboard.h でどのように定義されているか確認してください。
+  const uint8_t BLE_KEY_LEFT_CTRL_BIT_MASK = (1 << 0);  // 0x01
+  const uint8_t BLE_KEY_LEFT_SHIFT_BIT_MASK = (1 << 1); // 0x02
+  const uint8_t BLE_KEY_LEFT_ALT_BIT_MASK = (1 << 2);   // 0x04
+  const uint8_t BLE_KEY_LEFT_GUI_BIT_MASK = (1 << 3);   // 0x08
+  // const uint8_t BLE_KEY_RIGHT_CTRL_BIT_MASK  = (1 << 4); // 0x10 (今回は左のみ考慮)
+  // const uint8_t BLE_KEY_RIGHT_SHIFT_BIT_MASK = (1 << 5); // 0x20 (今回は左のみ考慮)
+  // const uint8_t BLE_KEY_RIGHT_ALT_BIT_MASK   = (1 << 6); // 0x40 (今回は左のみ考慮)
+  // const uint8_t BLE_KEY_RIGHT_GUI_BIT_MASK   = (1 << 7); // 0x80 (今回は左のみ考慮)
+
+  // --- Cursor Mode: Translate specific chars to arrow keys (if Fn not active) ---
+  if (cursorMode)
+  {
+    bool arrowKeySentInCursorMode = false;
+    // key.word はShiftキーの影響を受けるため、key.word[0] と physicalMods を組み合わせて
+    // どの物理キーが押されたかを判断する。
+    if (!key.word.empty()) { // key.word が空でないことを確認
+      char first_char_in_word = key.word[0];
+      uint8_t arrowKeyCode = 0;
+      int tempDispIndex = -1;
+
+      // Check for the physical key corresponding to ';' / ':'
+      if (first_char_in_word == ';' || first_char_in_word == ':')
       {
-        dispLx(3, "");
-        dispKey(arrow_key[useFnKeyIndex]);
-        if (currentModifiers)
-        {
-          bleKey.releaseAll();
-          currentModifiers = 0;
-        }
-        useFnKeyIndex = -1;
+        arrowKeyCode = KEY_UP_ARROW;
+        tempDispIndex = 0;
+      }
+      // Check for the physical key corresponding to '.' / '>'
+      else if (first_char_in_word == '.' || first_char_in_word == '>')
+      {
+        arrowKeyCode = KEY_DOWN_ARROW;
+        tempDispIndex = 1;
+      }
+      // Check for the physical key corresponding to ',' / '<'
+      else if (first_char_in_word == ',' || first_char_in_word == '<')
+      {
+        arrowKeyCode = KEY_LEFT_ARROW;
+        tempDispIndex = 2;
+      }
+      // Check for the physical key corresponding to '/' / '?'
+      else if (first_char_in_word == '/' || first_char_in_word == '?')
+      {
+        arrowKeyCode = KEY_RIGHT_ARROW;
+        tempDispIndex = 3;
+      }
+      // Check for the physical key corresponding to '`' / '~'
+      else if (first_char_in_word == '`' || first_char_in_word == '~')
+      {
+        arrowKeyCode = KEY_ESC;
+        tempDispIndex = 4;
+      }
+      // Note: This logic assumes that if Shift is pressed, key.word[0] will contain
+      // the shifted character (e.g., ':' for ';'). If key.word becomes empty or
+      // behaves differently with Shift for these specific keys, this logic might need adjustment.
+
+      if (arrowKeyCode != 0)
+      {
+        Serial.printf("CursorMode: Sending arrow key 0x%X via sendReport. Physical Modifiers: 0x%X\n", arrowKeyCode, physicalMods);
+
+        // Fnキー処理と同様に bleKey.write() を試す
+        // この時点で bleKey.press(KEY_LEFT_SHIFT) などが physicalMods に基づいて
+        // 既に呼び出されているため、修飾キーは有効になっているはず。
+        bleKey.write(arrowKeyCode);
+
+        // cursorMode の場合、Fnキー処理のように bleKey.releaseAll() は呼び出さない。
+        // Shiftキーなどの修飾キーは、物理的に離されるまで維持されるべき。
+        // bleKey.write() はキーのプレスとリリースを行うため、
+        // 矢印キーは単発で送信される。
+
+        if (tempDispIndex != -1)
+          dispKey(arrow_key[tempDispIndex]);
+        arrowKeySentInCursorMode = true;
         return;
       }
     }
   }
 
-  // -- Special keys (BACKSPACE/ENTER/TAB) -----------
-  bool useSpecialKeys = false;
+  // --- Special Keys (Backspace, Enter, Tab) - if Fn not active ---
   if (key.del)
   {
-    if (key.fn)
-    {
-      bleKey.write(KEY_DELETE);
-      dispKey("Delete : 0x" + String(KEY_DELETE, HEX));
-    }
-    else
-    {
-      bleKey.write(KEY_BACKSPACE);
-      dispKey("Backspae : 0x" + String(KEY_BACKSPACE, HEX));
-    }
-    useSpecialKeys = true;
+    bleKey.write(KEY_BACKSPACE);
+    dispKey("Backspace : 0x" + String(KEY_BACKSPACE, HEX));
+    return;
   }
   if (key.enter)
   {
     bleKey.write(KEY_RETURN);
     dispKey("Enter : 0x" + String(KEY_RETURN, HEX));
-    useSpecialKeys = true;
+    return;
   }
   if (key.tab)
   {
     bleKey.write(KEY_TAB);
     dispKey("Tab : 0x" + String(KEY_TAB, HEX));
-    useSpecialKeys = true;
-  }
-  if (key.opt)
-  {
-    bleKey.press(KEY_LEFT_GUI);
-    dispKey("Opt : 0x" + String(KEY_LEFT_GUI, HEX));
-    useSpecialKeys = true;
-  }
-  if (useSpecialKeys)
-  {
-    bleKey.releaseAll();
-    currentModifiers = 0;
-    useSpecialKeys = false;
     return;
   }
-  
-  // --- Modifier Key Processing ---
-  // This section handles the state of Ctrl, Shift, Alt based on physical key presses.
-  // It updates `currentModifiers` which reflects modifiers intended to be active for BLE transmission.
-  if (physicalModifiersThisEvent) // If Ctrl, Shift, or Alt are physically pressed in this event
-  {
-    currentModifiers = physicalModifiersThisEvent;
-  }
-  else if (!key.word.empty() || !key.del || !key.enter || !key.tab)
-  {
-    // No physical Ctrl, Shift, Alt pressed in *this* event,
-    // but other keys might be pressed. `currentModifiers` might hold state
-    // from a *previous* modifier-only press.
-    // If no character/action key is pressed either, `currentModifiers` will be cleared later
-    // by the keyInput() function when all keys are released.
-  }
 
-  // --- Action and Character Key Processing ---
-  bool characterOrActionSent = false;
-  // Flag to track if a character/action key was sent
-
-  // **********************************
-  // Check if there's a non-modifier key to send
-  if (!key.word.empty() || key.ctrl || key.shift || key.alt)
+  // --- Regular Character Key Processing ---
+  if (!key.word.empty())
   {
-    if (currentModifiers)
+    bool char_sent_this_event = false;
+    for (char k_char : key.word)
     {
-      activeBleMods = "";
+      bool handled_by_cursor_mode_already = false;
+      if (cursorMode)
+      {
+        if (k_char == ';' || k_char == '.' || k_char == ',' || k_char == '/' || k_char == '`')
+        {
+          handled_by_cursor_mode_already = true;
+        }
+      }
 
-      if (currentModifiers & 0b0001)
+      if (!handled_by_cursor_mode_already)
       {
-        dispLx(3, "Ctrl");
-        bleKey.press(KEY_LEFT_CTRL);
-        activeBleMods += "Ctrl ";
-      }
-      if (currentModifiers & 0b0010)
-      {
-        dispLx(3, "Shift");
-        bleKey.press(KEY_LEFT_SHIFT);
-        activeBleMods += "Shift ";
-      }
-      if (currentModifiers & 0b0100)
-      {
-        dispLx(3, "Alt");
-        bleKey.press(KEY_LEFT_ALT);
-        activeBleMods += "Alt ";
+        bleKey.write(k_char);
+        dispKey(String(k_char) + " : 0x" + String(k_char, HEX));
+        char_sent_this_event = true;
       }
     }
-    // **********************************
-
-    // // -- Special keys (BACKSPACE/ENTER/TAB) -----------
-    // if (key.del)
-    // {
-    //   if (key.fn)
-    //   {
-    //     bleKey.write(KEY_DELETE);
-    //     dispKey("Delete : 0x" + String(KEY_DELETE, HEX));
-    //   }
-    //   else
-    //   {
-    //     bleKey.write(KEY_BACKSPACE);
-    //     dispKey("Backspae : 0x" + String(KEY_BACKSPACE, HEX));
-    //   }
-    //   characterOrActionSent = true;
-    // }
-    // if (key.enter)
-    // {
-    //   bleKey.write(KEY_RETURN);
-    //   dispKey("Enter : 0x" + String(KEY_RETURN, HEX));
-    //   characterOrActionSent = true;
-    // }
-    // if (key.tab)
-    // {
-    //   bleKey.write(KEY_TAB);
-    //   dispKey("Tab : 0x" + String(KEY_TAB, HEX));
-    //   characterOrActionSent = true;
-    // }
-
-    // if (key.opt)
-    // {
-    //   bleKey.press(KEY_LEFT_GUI);
-    //   dispKey("Opt : 0x" + String(KEY_LEFT_GUI, HEX));
-    //   characterOrActionSent = true;
-    // }
-
-    // 普通の文字
-    for (auto i : key.word)
+    if (char_sent_this_event)
     {
-      if (!activeBleMods.isEmpty())
-      {
-        dispLx(3, activeBleMods);
-        activeBleMods = "";
-      }
-      else
-      {
-        dispLx(3, "");
-      }
-
-      bleKey.write(i);
-      dispKey(String(i) + " : 0x" + String(i, HEX));
-      characterOrActionSent = true;
+      return;
     }
-
-    // If a character/action key was sent *and* currentModifiers were active for it,
-    // release all BLE modifiers and clear currentModifiers.
-    if (characterOrActionSent && currentModifiers)
-    {
-      bleKey.releaseAll();
-      currentModifiers = 0;
-    }
-    else if (!characterOrActionSent && physicalModifiersThisEvent == 0 && currentModifiers != 0)
-    {
-      // This case is tricky: no char/action sent, no physical mods NOW, but currentModifiers was set.
-      // This implies a modifier was pressed alone, then released alone.
-      // The release is handled by keyInput() when isPressed() becomes false.
-    }
-  }
-  else if (physicalModifiersThisEvent == 0 && currentModifiers != 0)
-  {
-    // Only modifier keys were involved, and now they are not physically pressed.
-    // The actual release of these modifiers from BLE will be handled by keyInput()
-    // when M5Cardputer.Keyboard.isPressed() becomes false.
   }
 }
 
@@ -310,20 +368,21 @@ void keyInput()
   if (M5Cardputer.Keyboard.isChange())
   {
     lastKeyInput = millis();
+    m5::Keyboard_Class::KeysState keys_status = M5Cardputer.Keyboard.keysState();
 
     if (M5Cardputer.Keyboard.isPressed())
     {
-      m5::Keyboard_Class::KeysState keys_status = M5Cardputer.Keyboard.keysState();
       keySend(keys_status);
     }
-    else
+    else // All keys are physically released
     {
-      // All keys have been released physically on the Cardputer
-      if (currentModifiers)
-      {                       // If any modifiers were virtually held by BLE
-        bleKey.releaseAll();  // Release them from the BLE host
-        currentModifiers = 0; // Clear our record of active BLE modifiers
-      }
+      // When no keys are pressed on the Cardputer, release all modifiers on the BLE host.
+      // This ensures a clean state.
+      bleKey.releaseAll();
+
+      activeBleModsDisplay = "";
+      dispLx(3, "");
+      useFnKeyIndex = -1;
     }
   }
 }
@@ -337,7 +396,7 @@ void dispLx(uint8_t Lx, String msg)
   // L2    ---
   // L3   (ctrl/shift/alt) [WHITE]
   // L4    ---
-  // L5   Keys-- char/(tab/enter/del)/(up/down/left/right) [YELLOW]
+  // L5   Keys-- char/(tab/enter/del)/(UpArrow/DownArrow/LeftArrow/RightArrow) [YELLOW]
   if (Lx < 1 || Lx > 5)
     return;
 
@@ -348,6 +407,8 @@ void dispLx(uint8_t Lx, String msg)
 
 void dispBleInfo(bool connected)
 {
+  const String BLE_INF[] = {"OFF", "ON"};
+
   if (connected)
   {
     M5Cardputer.Display.setTextColor(TFT_GREEN, TFT_BLACK);
@@ -378,6 +439,7 @@ void setup()
   disp_init();
   dispBleInfo(false);
   lastKeyInput = millis();
+  Serial.println("Cardputer Started!");
 }
 
 void loop()
@@ -403,13 +465,15 @@ void disp_init()
   M5Cardputer.Display.println("- " + PROG_NAME + " -");
 }
 
+#define WAIT_SERIAL_SETTING_DONE
 void m5stack_begin()
 {
   auto cfg = M5.config();
-  cfg.serial_baudrate = 115200;
-  cfg.internal_imu = false;
-  cfg.internal_mic = false;
-  cfg.output_power = false;
+  // M5Cardputer.begin(cfg, true); // M5.config()より先にM5Cardputer.begin()を呼ぶ必要がある場合があるため、念のため修正
+  cfg.serial_baudrate = 115200; // シリアル通信速度
+  cfg.internal_imu = false;     // IMU (加速度・ジャイロセンサー) を使用しない
+  cfg.internal_mic = false;     // マイクを使用しない
+  cfg.output_power = false;     // Groveポートの電源出力を無効化 (バッテリー節約のため)
   cfg.led_brightness = 0;
   M5Cardputer.begin(cfg, true);
   M5Cardputer.Speaker.setVolume(0);
@@ -431,6 +495,11 @@ void m5stack_begin()
       M5.getPin(m5::pin_name_t::sd_spi_ss));
 
   SD_ENABLE = SD_begin();
+
+#ifdef WAIT_SERIAL_SETTING_DONE
+  delay(5000);
+#endif
+  Serial.println("\n\n*** m5stack begin ***");
 }
 
 // ------------------------------------------
