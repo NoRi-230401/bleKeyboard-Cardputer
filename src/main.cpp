@@ -6,123 +6,106 @@
 #include <algorithm> // For std::find
 #include <map>
 
-void checkSleepTime();
-void notifyConnection();
-void keySend(m5::Keyboard_Class::KeysState key);
-void keyInput();
-void dispKey(String msg);
+void setup();
+void loop();
+bool checkKeyInput();
+void bleKeySend();
+void notifyBleConnect();
+void checkAutoPowerOff();
+
 void dispLx(uint8_t Lx, String msg);
-// void dispBleInfo(bool connected);
+void dispSendKey(String msg);
 void dispPowerOff();
+void dispState();
+void dispStateInit();
+
 void dispInit();
 void m5stack_begin();
 void SDU_lobby();
 bool SD_begin();
 void POWER_OFF();
-void dispState();
-void dispStateInit();
 
-String PROG_NAME = "Tiny bleKeyboard";
+// -- Cardputer display define -------
+#define X_WIDTH 240
+#define Y_HEIGHT 135
+#define X_MAX 239
+#define Y_MAX 134
+#define N_COLS 20 // colums : 列
+#define N_ROWS 6  // rows   : 行
+#define H_CHR 22  // 1 chara height
+#define W_CHR 12  // 1 chara width
+//-------------------------------------
+
+const String PROG_NAME = "Tiny bleKeyboard";
 bool SD_ENABLE;
 SPIClass SPI2;
-bool DISP_ON = true;
-String const arrow_key[] = {"UpArrow", "DownArrow", "LeftArrow", "RightArrow", "Escape"}; // Display names
-int useFnKeyIndex = -1;
-
 BleKeyboard bleKey;
+m5::Keyboard_Class::KeysState keys_status;
+const String arrow_key[] = {"UpArrow", "DownArrow", "LeftArrow", "RightArrow", "Escape"}; // Display names
+int useFnKeyIndex = -1;
 unsigned long lastKeyInput = 0;
-const unsigned long keyInputTimeout = 30 * 60 * 1000L; // ms: wait for SLEEP
-const unsigned long WARN_TM = 30 * 1000L;              // ms: warning time for SLEEP
-static String activeBleModsDisplay = "";               // Display active BLE modifiers on line 3
-static bool toggleFG = true;
-
-void checkSleepTime()
-{
-  if (millis() > keyInputTimeout + lastKeyInput)
-  {
-    dispPowerOff();
-    POWER_OFF();
-  }
-  else if (millis() > keyInputTimeout + lastKeyInput - WARN_TM)
-  {
-    if (toggleFG)
-    {
-      M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
-      dispLx(3, "  SLEEP TIME");
-      M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-      delay(500);
-      toggleFG = !toggleFG;
-      dispLx(3, "");
-    }
-    else
-    {
-      delay(500);
-      toggleFG = !toggleFG;
-    }
-  }
-}
-
-void dispPowerOff()
-{
-  dispLx(1, "");
-  dispLx(2, "");
-  M5Cardputer.Display.setTextColor(TFT_RED, TFT_BLACK);
-  dispLx(3, "  POWER OFF");
-  dispLx(4, "");
-  dispLx(5, "");
-  delay(5000);
-}
-
+const unsigned long autoPowerOffTimeout = 20 * 60 * 1000L; // ms: wait for auto PowerOff
+const unsigned long WARN_TM = 30 * 1000L;                  // ms: warning for auto PowerOff
+static String activeBleModsDisplay = "";                   // Display active BLE modifiers on line 3
+static bool warnDispFlag = true;
 static bool bleConnect = false;
 static bool capsLock = false;
 static bool cursorMode = false;
 
-const String L1Str =     "BLE f1:Caps f2:CurMd";
-const String bleL2[] = {" ng "," ok "};
-const String capsL2[] = {" unlock ", "  lock  "};
-const String cursorModeL2[] = {"   off  ", "  on    "};
-
-void dispState()
+void setup()
 {
-  String line2 = "";
-  line2 += bleL2[bleConnect ? 1 : 0];
-  line2 += capsL2[capsLock ?  1 : 0];
-  line2 += cursorModeL2[cursorMode ? 1 : 0];
-  dispLx(2, line2);
-}
+  m5stack_begin();
+  if (SD_ENABLE)
+    SDU_lobby();
 
-void dispStateInit()
-{
-  M5Cardputer.Display.setTextColor(TFT_GREEN, TFT_BLACK);
-  dispLx(1, L1Str);
-  M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-  dispState();
+  bleKey.begin();
+  dispInit();
+  lastKeyInput = millis();
+  Serial.println("Cardputer Started!");
 }
 
 
-
-void notifyConnection()
+void loop()
 {
-  if (bleKey.isConnected() && !bleConnect)
+  M5Cardputer.update();
+
+  if (checkKeyInput())
   {
-    bleConnect = true;
-    // dispBleInfo(true);
-    dispState();
+    bleKeySend();
   }
-  else if (!bleKey.isConnected() && bleConnect)
-  {
-    bleConnect = false;
-    // dispBleInfo(false);
-    dispState();
-  }
+
+  notifyBleConnect();
+  checkAutoPowerOff();
+  delay(20);
 }
 
-
-
-
-void keySend(m5::Keyboard_Class::KeysState key)
+bool checkKeyInput()
 {
-  // m5::Keyboard_Class CP_key;
+  if (M5Cardputer.Keyboard.isChange())
+  {
+    lastKeyInput = millis();
+    keys_status = M5Cardputer.Keyboard.keysState();
+
+    if (M5Cardputer.Keyboard.isPressed())
+    {
+      return true;
+    }
+    else // All keys are physically released
+    {
+      // When no keys are pressed on the Cardputer, release all modifiers on the BLE host.
+      // This ensures a clean state.
+      bleKey.releaseAll();
+      activeBleModsDisplay = "";
+      dispLx(3, "");
+      useFnKeyIndex = -1;
+    }
+  }
+  return false;  
+}
+
+void bleKeySend()
+{
+  m5::Keyboard_Class::KeysState key = keys_status;
 
   // --- [fn] Key Processing (High Priority) ---
   if (key.fn)
@@ -137,7 +120,7 @@ void keySend(m5::Keyboard_Class::KeysState key)
       bleKey.releaseAll(); // Release any other held modifiers
       useFnKeyIndex = -1;  // Reset display state
       dispState();
-      dispLx(3, "");       // Clear modifier display
+      dispLx(3, ""); // Clear modifier display
       return;
     }
 
@@ -187,8 +170,7 @@ void keySend(m5::Keyboard_Class::KeysState key)
       bleKey.write(fnKeyAction);
       dispLx(3, "");
       if (tempFnKeyIndex != -1)
-        dispKey(arrow_key[tempFnKeyIndex]);
-      // else dispKey("Esc"); // Already handled by arrow_key array for index 4
+        dispSendKey(arrow_key[tempFnKeyIndex]);
 
       bleKey.releaseAll();
       useFnKeyIndex = -1;
@@ -199,7 +181,7 @@ void keySend(m5::Keyboard_Class::KeysState key)
     if (key.del)
     {
       bleKey.write(KEY_DELETE);
-      dispKey("Delete : 0x" + String(KEY_DELETE, HEX));
+      dispSendKey("Delete");
       bleKey.releaseAll();
       return;
     }
@@ -310,7 +292,7 @@ void keySend(m5::Keyboard_Class::KeysState key)
         Serial.printf("CursorMode: Sending arrow key 0x%X via sendReport. Physical Modifiers: 0x%X\n", arrowKeyCode, physicalMods);
         bleKey.write(arrowKeyCode);
         if (tempDispIndex != -1)
-          dispKey(arrow_key[tempDispIndex]);
+          dispSendKey(arrow_key[tempDispIndex]);
 
         arrowKeySentInCursorMode = true;
         return;
@@ -322,19 +304,19 @@ void keySend(m5::Keyboard_Class::KeysState key)
   if (key.del)
   {
     bleKey.write(KEY_BACKSPACE);
-    dispKey("Backspace : 0x" + String(KEY_BACKSPACE, HEX));
+    dispSendKey("Backspace - 0x" + String(KEY_BACKSPACE, HEX));
     return;
   }
   if (key.enter)
   {
     bleKey.write(KEY_RETURN);
-    dispKey("Enter : 0x" + String(KEY_RETURN, HEX));
+    dispSendKey("Enter - 0x" + String(KEY_RETURN, HEX));
     return;
   }
   if (key.tab)
   {
     bleKey.write(KEY_TAB);
-    dispKey("Tab : 0x" + String(KEY_TAB, HEX));
+    dispSendKey("Tab - 0x" + String(KEY_TAB, HEX));
     return;
   }
 
@@ -342,7 +324,7 @@ void keySend(m5::Keyboard_Class::KeysState key)
   if (!key.word.empty())
   {
     bool char_sent_this_event = false;
-  
+
     for (char k_char : key.word)
     {
       bool handled_by_cursor_mode_already = false;
@@ -357,15 +339,12 @@ void keySend(m5::Keyboard_Class::KeysState key)
       if (!handled_by_cursor_mode_already)
       {
         String ucharStr = String(k_char);
-        if(capsLock)
+        if (capsLock)
         {
           ucharStr.toUpperCase();
         }
         bleKey.write(ucharStr[0]);
-        dispKey(ucharStr + " : 0x" + String(ucharStr[0], HEX));
-
-        // bleKey.write(k_char);
-        // dispKey(String(k_char) + " : 0x" + String(k_char, HEX));
+        dispSendKey(ucharStr + " - 0x" + String(ucharStr[0], HEX));
         char_sent_this_event = true;
       }
     }
@@ -376,77 +355,150 @@ void keySend(m5::Keyboard_Class::KeysState key)
   }
 }
 
-void keyInput()
+static unsigned long PREV_bleChk_time = 0;
+void notifyBleConnect()
 {
-  if (M5Cardputer.Keyboard.isChange())
+  const unsigned long next_check_time = 1000L;
+  if (millis() < PREV_bleChk_time + next_check_time)
+    return;
+
+  if (bleKey.isConnected() && !bleConnect)
   {
-    lastKeyInput = millis();
-    m5::Keyboard_Class::KeysState keys_status = M5Cardputer.Keyboard.keysState();
+    bleConnect = true;
+    dispState();
+  }
+  else if (!bleKey.isConnected() && bleConnect)
+  {
+    bleConnect = false;
+    dispState();
+  }
 
-    if (M5Cardputer.Keyboard.isPressed())
-    {
-      keySend(keys_status);
-    }
-    else // All keys are physically released
-    {
-      // When no keys are pressed on the Cardputer, release all modifiers on the BLE host.
-      // This ensures a clean state.
-      bleKey.releaseAll();
+  PREV_bleChk_time = millis();
+}
 
-      activeBleModsDisplay = "";
+void checkAutoPowerOff()
+{
+  if (millis() > autoPowerOffTimeout + lastKeyInput)
+  {
+    dispPowerOff();
+    POWER_OFF();
+  }
+  else if (millis() > autoPowerOffTimeout + lastKeyInput - WARN_TM)
+  {
+    if (warnDispFlag)
+    {
+      M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
+      dispLx(3, "  SLEEP TIME");
+      M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+      delay(500);
+      warnDispFlag = !warnDispFlag;
       dispLx(3, "");
-      useFnKeyIndex = -1;
+    }
+    else
+    {
+      delay(500);
+      warnDispFlag = !warnDispFlag;
     }
   }
 }
 
-#define H_CHR 22 // 1 line height
 void dispLx(uint8_t Lx, String msg)
 {
-  //---   Lx is (1 to 5) -----------
+  //---   Lx is (0 to 5) -----------
   // L0   - app title -
   // L1   BLE connect info [GREEN]
   // L2    ---
-  // L3   (ctrl/shift/alt) [WHITE]
+  // L3   (ctrl/shift/alt) [WHITE] modifiers
   // L4    ---
   // L5   Keys-- char/(tab/enter/del)/(UpArrow/DownArrow/LeftArrow/RightArrow) [YELLOW]
-  if (Lx < 1 || Lx > 5)
+  // -----------------------------
+  if (Lx < 0 || Lx > 5)
     return;
 
-  M5Cardputer.Display.fillRect(0, Lx * H_CHR, M5Cardputer.Display.width(), (Lx + 1) * H_CHR, TFT_BLACK);
+  M5Cardputer.Display.fillRect(0, Lx * H_CHR, M5Cardputer.Display.width(), H_CHR, TFT_BLACK);
   M5Cardputer.Display.setCursor(0, Lx * H_CHR);
   M5Cardputer.Display.print(msg);
 }
 
-void dispKey(String msg)
+void dispSendKey(String msg)
 {
   M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
-  dispLx(5, msg);
+  dispLx(5, " SendKey: " + msg);
   M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
 }
 
-void setup()
+void dispPowerOff()
 {
-  m5stack_begin();
-  if (SD_ENABLE)
-    SDU_lobby();
-
-  bleKey.begin();
-
-  dispInit();
-  dispStateInit();
-
-  lastKeyInput = millis();
-  Serial.println("Cardputer Started!");
+  dispLx(1, "");
+  dispLx(2, "");
+  M5Cardputer.Display.setTextColor(TFT_RED, TFT_BLACK);
+  dispLx(3, "  POWER OFF");
+  dispLx(4, "");
+  dispLx(5, "");
+  delay(5000);
 }
 
-void loop()
+void dispState()
 {
-  M5Cardputer.update();
-  notifyConnection();
-  keyInput();
-  checkSleepTime();
-  delay(20);
+  const String StCaps[] = {" unlock", "  lock"};
+  const String StCursorMode[] = {"   off", "   on"};
+  const String StBle[] = {"ng", "ok"};
+
+  int32_t line2 = 2 * H_CHR;
+  M5Cardputer.Display.fillRect(0, line2, M5Cardputer.Display.width(), H_CHR, TFT_BLACK);
+
+  // capsLock state
+  M5Cardputer.Display.setCursor(0, line2);
+  if (capsLock)
+  {
+    M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
+    M5Cardputer.Display.print(StCaps[1]);
+  }
+  else
+  {
+    M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+    M5Cardputer.Display.print(StCaps[0]);
+  }
+
+  // cusror mode state
+  M5Cardputer.Display.setCursor(W_CHR * 8, line2);
+  if (cursorMode)
+  {
+    M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
+    M5Cardputer.Display.print(StCursorMode[1]);
+  }
+  else
+  {
+    M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+    M5Cardputer.Display.print(StCursorMode[0]);
+  }
+
+  // Ble connect status
+  M5Cardputer.Display.setCursor(W_CHR * 17, line2);
+  if (bleConnect)
+  {
+    M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
+    M5Cardputer.Display.print(StBle[1]);
+  }
+  else
+  {
+    M5Cardputer.Display.setTextColor(TFT_RED, TFT_BLACK);
+    M5Cardputer.Display.print(StBle[0]);
+  }
+
+  M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+}
+
+void dispStateInit()
+{
+  //---------------------"01234567890123456789"------------------;
+  const String L1Str = "f1:Caps f2:CurMd BLE";
+  //---------------------"01234567890123456789"------------------;
+
+  M5Cardputer.Display.setTextColor(TFT_GREEN, TFT_BLACK);
+  dispLx(1, L1Str);
+  M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  dispState();
 }
 
 void dispInit()
@@ -461,6 +513,8 @@ void dispInit()
   M5Cardputer.Display.setTextWrap(false);
   M5Cardputer.Display.setCursor(0, 0);
   M5Cardputer.Display.println("- " + PROG_NAME + " -");
+
+  dispStateInit();
 }
 
 #define WAIT_SERIAL_SETTING_DONE
@@ -494,8 +548,8 @@ void m5stack_begin()
   SD_ENABLE = SD_begin();
 
 #ifdef WAIT_SERIAL_SETTING_DONE
-// vsCode terminal cannot get serial data 
-//  of cardputer before 5 sec ...!
+  // vsCode terminal cannot get serial data
+  //  of cardputer before 5 sec ...!
   delay(5000);
 #endif
   Serial.println("\n\n*** m5stack begin ***");
