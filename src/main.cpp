@@ -15,6 +15,7 @@ void checkAutoPowerOff();
 
 void dispLx(uint8_t Lx, String msg);
 void dispSendKey(String msg);
+void dispSendKey2(String msg);
 void dispPowerOff();
 void dispState();
 void dispStateInit();
@@ -64,7 +65,6 @@ void setup()
   Serial.println("Cardputer Started!");
 }
 
-
 void loop()
 {
   M5Cardputer.update();
@@ -100,7 +100,7 @@ bool checkKeyInput()
       useFnKeyIndex = -1;
     }
   }
-  return false;  
+  return false;
 }
 
 void bleKeySend()
@@ -170,7 +170,7 @@ void bleKeySend()
       bleKey.write(fnKeyAction);
       dispLx(3, "");
       if (tempFnKeyIndex != -1)
-        dispSendKey(arrow_key[tempFnKeyIndex]);
+        dispSendKey2(arrow_key[tempFnKeyIndex] + " - 0x" + String(fnKeyAction, HEX));
 
       bleKey.releaseAll();
       useFnKeyIndex = -1;
@@ -181,7 +181,7 @@ void bleKeySend()
     if (key.del)
     {
       bleKey.write(KEY_DELETE);
-      dispSendKey("Delete");
+      dispSendKey2("Delete - 0x" + String(KEY_DELETE, HEX));
       bleKey.releaseAll();
       return;
     }
@@ -292,7 +292,7 @@ void bleKeySend()
         Serial.printf("CursorMode: Sending arrow key 0x%X via sendReport. Physical Modifiers: 0x%X\n", arrowKeyCode, physicalMods);
         bleKey.write(arrowKeyCode);
         if (tempDispIndex != -1)
-          dispSendKey(arrow_key[tempDispIndex]);
+          dispSendKey2(arrow_key[tempDispIndex] + " - 0x" + String(arrowKeyCode, HEX));
 
         arrowKeySentInCursorMode = true;
         return;
@@ -304,19 +304,19 @@ void bleKeySend()
   if (key.del)
   {
     bleKey.write(KEY_BACKSPACE);
-    dispSendKey("Backspace - 0x" + String(KEY_BACKSPACE, HEX));
+    dispSendKey2("Backspace - 0x" + String(KEY_BACKSPACE, HEX));
     return;
   }
   if (key.enter)
   {
     bleKey.write(KEY_RETURN);
-    dispSendKey("Enter - 0x" + String(KEY_RETURN, HEX));
+    dispSendKey2("Enter - 0x" + String(KEY_RETURN, HEX));
     return;
   }
   if (key.tab)
   {
     bleKey.write(KEY_TAB);
-    dispSendKey("Tab - 0x" + String(KEY_TAB, HEX));
+    dispSendKey2("Tab - 0x" + String(KEY_TAB, HEX));
     return;
   }
 
@@ -406,8 +406,8 @@ void dispLx(uint8_t Lx, String msg)
 {
   //---   Lx is (0 to 5) -----------
   // L0   - app title -
-  // L1   BLE connect info [GREEN]
-  // L2    ---
+  // L1   f1 f2  bleInfo[GREEN]
+  // L2   [  dispStatus  ]
   // L3   (ctrl/shift/alt) [WHITE] modifiers
   // L4    ---
   // L5   Keys-- char/(tab/enter/del)/(UpArrow/DownArrow/LeftArrow/RightArrow) [YELLOW]
@@ -422,8 +422,15 @@ void dispLx(uint8_t Lx, String msg)
 
 void dispSendKey(String msg)
 {
-  M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
+  // M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
   dispLx(5, " SendKey: " + msg);
+  // M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+}
+
+void dispSendKey2(String msg)
+{
+  M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
+  dispLx(5, " " + msg);
   M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
 }
 
@@ -474,7 +481,7 @@ void dispState()
   }
 
   // Ble connect status
-  M5Cardputer.Display.setCursor(W_CHR * 17, line2);
+  M5Cardputer.Display.setCursor(W_CHR * 17 + 6, line2);
   if (bleConnect)
   {
     M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
