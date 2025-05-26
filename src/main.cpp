@@ -13,6 +13,8 @@ void bleKeySend();
 void notifyBleConnect();
 void checkAutoPowerOff();
 void dispLx(uint8_t Lx, String msg);
+void dispModsKeys(String msg);
+void dispModsCls();
 void dispSendKey(String msg);
 void dispSendKey2(String msg);
 void dispPowerOff();
@@ -36,14 +38,13 @@ void POWER_OFF();
 #define W_CHR 12  // 1 chara width
 
 //-------------------------------------
-// const String PROG_NAME = "Tiny bleKeyboard";
 SPIClass SPI2;
 BleKeyboard bleKey;
 m5::Keyboard_Class::KeysState keys_status;
 const String arrow_key[] = {"UpArrow", "DownArrow", "LeftArrow", "RightArrow"};
-const unsigned long autoPowerOffTimeout = 20 * 60 * 1000L; // ms: wait for PowerOff
+// const unsigned long autoPowerOffTimeout = 20 * 60 * 1000L; // ms: wait for PowerOff
+const unsigned long autoPowerOffTimeout = 10 * 60 * 1000L; // ms: wait for PowerOff
 const unsigned long WARN_TM = 30 * 1000L;                  // ms: warning befor PowerOff
-// int useFnKeyIndex = -1;
 unsigned long lastKeyInput = 0;
 
 static bool SD_ENABLE;
@@ -94,9 +95,7 @@ bool checkKeyInput()
       // When no keys are pressed on the Cardputer, release all modifiers on the BLE host.
       // This ensures a clean state.
       bleKey.releaseAll();
-      // modsDispStr = "";
-      dispLx(3, "");
-      // useFnKeyIndex = -1;
+      dispModsCls();
     }
   }
   return false;
@@ -127,9 +126,8 @@ void bleKeySend()
   {
     capsLock = !capsLock;
     bleKey.releaseAll();
-    // useFnKeyIndex = -1;
     dispState();
-    dispLx(3, "");
+    dispModsCls();
     return;
   }
 
@@ -139,8 +137,7 @@ void bleKeySend()
     cursorMode = !cursorMode;
     dispState();
     bleKey.releaseAll();
-    // useFnKeyIndex = -1;
-    dispLx(3, "");
+    dispModsCls();
     return;
   }
 
@@ -165,43 +162,42 @@ void bleKeySend()
     }
 
     uint8_t arrowKeyAction = 0;
-    int tempArrowKeyIndex = -1;
+    int arrowKeyIndex = -1;
 
     // UpArrow
     if (keyWord == ';' || keyWord == ':')
     {
       arrowKeyAction = KEY_UP_ARROW;
-      tempArrowKeyIndex = 0;
+      arrowKeyIndex = 0;
     }
     // DownArrow
     else if (keyWord == '.' || keyWord == '>')
     {
       arrowKeyAction = KEY_DOWN_ARROW;
-      tempArrowKeyIndex = 1;
+      arrowKeyIndex = 1;
     }
     // LeftArrow
     else if (keyWord == ',' || keyWord == '<')
     {
       arrowKeyAction = KEY_LEFT_ARROW;
-      tempArrowKeyIndex = 2;
+      arrowKeyIndex = 2;
     }
     // RightArrow
     else if (keyWord == '/' || keyWord == '?')
     {
       arrowKeyAction = KEY_RIGHT_ARROW;
-      tempArrowKeyIndex = 3;
+      arrowKeyIndex = 3;
     }
 
     if (arrowKeyAction != 0)
     {
       bleKey.write(arrowKeyAction);
-      dispLx(3, "");
-      if (tempArrowKeyIndex != -1)
+      dispModsCls();
+      if (arrowKeyIndex != -1)
       {
-        dispSendKey2(arrow_key[tempArrowKeyIndex] + " - 0x" + String(arrowKeyAction, HEX));
+        dispSendKey2(arrow_key[arrowKeyIndex] + " - 0x" + String(arrowKeyAction, HEX));
       }
       bleKey.releaseAll();
-      // useFnKeyIndex = -1;
       return;
     }
   }
@@ -243,7 +239,7 @@ void bleKeySend()
     return;
   }
 
-  // **** modifies keys (ctrl,shift,alt,opt) ******
+  // **** modifies keys (ctrl,shift,alt,opt and fn) ******
   // CTRL
   if (key.ctrl)
   {
@@ -272,7 +268,7 @@ void bleKeySend()
   {
     modsDispStr.trim();
   }
-  dispLx(3, modsDispStr);
+  dispModsKeys(modsDispStr);
 
   // *****  Regular Character Keys *****
   if (existWord)
@@ -302,7 +298,7 @@ void bleKeySend()
 static unsigned long PREV_bleChk_time = 0;
 void notifyBleConnect()
 {
-  const unsigned long next_check_time = 1009L; //1000以上で一番小さい素数
+  const unsigned long next_check_time = 1009L; // 1000以上で１番小さい素数にした
   if (millis() < PREV_bleChk_time + next_check_time)
     return;
 
@@ -348,14 +344,14 @@ void checkAutoPowerOff()
 
 void dispLx(uint8_t Lx, String msg)
 {
-  //---   Lx is (0 to 5) -----------
-  // L0   - app title -
-  // L1   f1 f2  bleInfo[GREEN]
-  // L2   [  dispStatus  ]
-  // L3   (ctrl/shift/alt) [WHITE] modifiers
-  // L4    ---
-  // L5   Keys-- char/(tab/enter/del)/(UpArrow/DownArrow/LeftArrow/RightArrow) [YELLOW]
-  // -----------------------------
+  //----------  Lx is (0 to 5) ------------------
+  // L0  "- tiney bleKeyborad -" : BLE info
+  // L1    f1:Caps     f2:CurMd
+  // L2   [un/lock]    [on/off]
+  // L3        --------
+  // L4   modsKeys (shift/ctrl/alt/fn/opt)
+  // L5   sendKey info
+  // --------------------------------------------
   if (Lx < 0 || Lx > 5)
     return;
 
@@ -364,13 +360,24 @@ void dispLx(uint8_t Lx, String msg)
   M5Cardputer.Display.print(msg);
 }
 
+void dispModsKeys(String msg)
+{ // line4 : modifiers keys (ctrl/alt/shift and /fn/opt)
+  dispLx(4, msg);
+}
+
+void dispModsCls()
+{ // line4 : modifiers keys disp clear
+  const int line4 = 4 * H_CHR;
+  M5Cardputer.Display.fillRect(0, line4, M5Cardputer.Display.width(), H_CHR, TFT_BLACK);
+}
+
 void dispSendKey(String msg)
-{
+{ // line5 : normal character send info
   dispLx(5, " SendKey: " + msg);
 }
 
 void dispSendKey2(String msg)
-{
+{ // line5 : special character send info
   M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
   dispLx(5, " " + msg);
   M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
@@ -388,7 +395,7 @@ void dispPowerOff()
 }
 
 void dispState()
-{
+{ // Line2 : status
   const String StCaps[] = {" unlock", "  lock"};
   const String StCursorMode[] = {"   off", "   on"};
 
@@ -424,31 +431,29 @@ void dispState()
 }
 
 void dispBleState()
-{
+{ // line0: BLE connect information
   //----------------------"01234567890123456789"------------------;
   // const String PRStr = "- tiny bleKeyboard -";
   //----------------------"01234567890123456789"------------------;
 
   M5Cardputer.Display.fillRect(0, 0, M5Cardputer.Display.width(), H_CHR, TFT_BLACK);
-  M5Cardputer.Display.setCursor(0,0);
-  M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);  
+  M5Cardputer.Display.setCursor(0, 0);
+  M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
   M5Cardputer.Display.print("- tiny ");
 
   if (bleConnect)
-    M5Cardputer.Display.setTextColor(TFT_BLUE, TFT_BLACK);  
+    M5Cardputer.Display.setTextColor(TFT_BLUE, TFT_BLACK);
   else
-    M5Cardputer.Display.setTextColor(TFT_RED, TFT_BLACK);  
+    M5Cardputer.Display.setTextColor(TFT_RED, TFT_BLACK);
   M5Cardputer.Display.print("ble");
 
-  M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);  
+  M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
   M5Cardputer.Display.print("Keyboard -");
 }
-
 
 void dispStateInit()
 {
   //-------------------"01234567890123456789"------------------;
-  // const String L1Str = "f1:Caps f2:CurMd BLE";
   const String L1Str = "f1:Caps f2:CurMd";
   //-------------------"01234567890123456789"------------------;
   dispBleState();
@@ -470,12 +475,12 @@ void dispInit()
   M5Cardputer.Display.setTextDatum(top_left); // 文字の基準位置
   M5Cardputer.Display.setTextWrap(false);
   M5Cardputer.Display.setCursor(0, 0);
-  
+
   // M5Cardputer.Display.println("- " + PROG_NAME + " -");
   dispStateInit();
 }
 
-#define WAIT_SERIAL_SETTING_DONE
+// #define WAIT_SERIAL_SETTING_DONE
 void m5stack_begin()
 {
   auto cfg = M5.config();
