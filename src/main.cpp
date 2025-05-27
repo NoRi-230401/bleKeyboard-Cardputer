@@ -33,7 +33,7 @@ void POWER_OFF();
 #define X_MAX 239
 #define Y_MAX 134
 #define N_COLS 20 // colums : 列
-#define N_ROWS 6  // rows   : 行
+#define N_ROWS 6  // rows   : 行/
 #define H_CHR 22  // 1 chara height
 #define W_CHR 12  // 1 chara width
 
@@ -108,6 +108,7 @@ void bleKeySend()
   String modsDispStr = "";
   uint8_t keyWord = 0;
   bool existWord = key.word.empty() ? false : true;
+  bool alredySentKey = false;
 
   if (existWord)
   {
@@ -116,9 +117,6 @@ void bleKeySend()
   }
   else
     Serial.printf("key.word is empty, modifiers: 0x%X\n", mods);
-
-  if (key.fn)
-    modsDispStr += "Fn ";
 
   // ****** [fn] Mode Selection (High Priority) **************
   // Caps Lock Toggle (Fn + '1')
@@ -141,26 +139,109 @@ void bleKeySend()
     return;
   }
 
-  // ********** Home / End / ARROW KEYS ****************
+  // **function Keys(Tab,Backspace, Delete, Enter, Esc, Home, End) ***
+  // Tab
+  if (key.tab)
+  {
+    bleKey.write(KEY_TAB);
+    bleKey.releaseAll();
+    dispSendKey2("Tab - 0x" + String(KEY_TAB, HEX));
+    return;
+  }
+  // Backspace
+  if (key.del && !key.fn)
+  { // Backspace : key.del and !key.fn
+    bleKey.write(KEY_BACKSPACE);
+    bleKey.releaseAll();
+    dispSendKey2("Backspace - 0x" + String(KEY_BACKSPACE, HEX));
+    return;
+  }
+  // Delete
+  else if (key.del && key.fn)
+  { // Delete : key.del and key.fn
+    bleKey.write(KEY_DELETE);
+    bleKey.releaseAll();
+    dispSendKey2("Delete - 0x" + String(KEY_DELETE, HEX));
+    return;
+  }
+  // Enter
+  if (key.enter)
+  {
+    bleKey.write(KEY_RETURN);
+    bleKey.releaseAll();
+    dispSendKey2("Enter - 0x" + String(KEY_RETURN, HEX));
+    return;
+  }
+  // Esc : fn + '`' or  '~'
+  if (key.fn && existWord && (keyWord == '`' || keyWord == '~'))
+  {
+    bleKey.write(KEY_ESC);
+    bleKey.releaseAll();
+    dispSendKey2("Escape - 0x" + String(KEY_ESC, HEX));
+    return;
+  }
+  // ********** Home / End  ****************
+  // Home Key  (Fn + '-' / '_')
+  if ((key.fn || cursorMode) && existWord && (keyWord == '-' || keyWord == '_'))
+  {
+    bleKey.write(KEY_HOME);
+    bleKey.releaseAll();
+    dispSendKey2("Home - 0x" + String(KEY_HOME, HEX));
+    return;
+  }
+  // End Key  (Fn + '=' / '+')
+  if ((key.fn || cursorMode) && existWord && (keyWord == '=' || keyWord == '+'))
+  {
+    bleKey.write(KEY_END);
+    bleKey.releaseAll();
+    dispSendKey2("End - 0x" + String(KEY_END, HEX));
+    return;
+  }
+
+  // ** modifies keys (ctrl,shift,alt,Opt and fn) **
+  // these keys are uses other key conbination
+  // ---------------------------------------------------
+  // fn : not sent, but disp modsDispStr
+  if (key.fn)
+  {
+    modsDispStr += "Fn ";
+  }
+  
+  // OPT (GUI Key)
+  if (key.opt)
+  {
+    bleKey.press(KEY_LEFT_GUI);
+    modsDispStr += "Opt ";
+  }
+
+  // CTRL
+  if (key.ctrl)
+  {
+    bleKey.press(KEY_LEFT_CTRL);
+    modsDispStr += "Ctrl ";
+  }
+
+  // SHIFT
+  if (key.shift)
+  {
+    bleKey.press(KEY_LEFT_SHIFT);
+    modsDispStr += "Shift ";
+  }
+  // ALT
+  if (key.alt)
+  {
+    bleKey.press(KEY_LEFT_ALT);
+    modsDispStr += "Alt ";
+  }
+  if (!modsDispStr.isEmpty())
+  {
+    modsDispStr.trim();
+  }
+  dispModsKeys(modsDispStr);
+
+  // **********  ARROW KEYS ****************
   if ((key.fn || cursorMode) && existWord)
   {
-    // Home Key  (Fn + '-' / '_')
-    if (keyWord == '-' || keyWord == '_')
-    {
-      bleKey.write(KEY_HOME);
-      bleKey.releaseAll();
-      dispSendKey2("Home - 0x" + String(KEY_HOME, HEX));
-      return;
-    }
-
-    // End Key  (Fn + '=' / '+')
-    if (keyWord == '=' || keyWord == '+')
-    {
-      bleKey.write(KEY_END);
-      dispSendKey2("End - 0x" + String(KEY_END, HEX));
-      return;
-    }
-
     uint8_t arrowKeyAction = 0;
     int arrowKeyIndex = -1;
 
@@ -189,86 +270,21 @@ void bleKeySend()
       arrowKeyIndex = 3;
     }
 
-    if (arrowKeyAction != 0)
+    if (arrowKeyAction != 0 && arrowKeyIndex != -1)
     {
       bleKey.write(arrowKeyAction);
       dispModsCls();
-      if (arrowKeyIndex != -1)
-      {
-        dispSendKey2(arrow_key[arrowKeyIndex] + " - 0x" + String(arrowKeyAction, HEX));
-      }
-      bleKey.releaseAll();
-      return;
+      dispSendKey2(arrow_key[arrowKeyIndex] + " - 0x" + String(arrowKeyAction, HEX));
+      alredySentKey = true;
     }
   }
-
-  // ***** edit Keys(Backspace, Delete, Enter, Tab , Esc) *****-
-  // Backspace
-  if (key.del && !key.fn)
-  { // Backspace : key.del and !key.fn
-    bleKey.write(KEY_BACKSPACE);
-    dispSendKey2("Backspace - 0x" + String(KEY_BACKSPACE, HEX));
+  
+  if (alredySentKey)
+  {
+    bleKey.releaseAll();
     return;
   }
-  // Delete
-  else if (key.del && key.fn)
-  { // Delete : key.del and key.fn
-    bleKey.write(KEY_DELETE);
-    dispSendKey2("Delete - 0x" + String(KEY_DELETE, HEX));
-    return;
-  }
-  // Enter
-  if (key.enter)
-  {
-    bleKey.write(KEY_RETURN);
-    dispSendKey2("Enter - 0x" + String(KEY_RETURN, HEX));
-    return;
-  }
-  // Tab
-  if (key.tab)
-  {
-    bleKey.write(KEY_TAB);
-    dispSendKey2("Tab - 0x" + String(KEY_TAB, HEX));
-    return;
-  }
-  // Esc : fn + '`' or  '~'
-  if (key.fn && existWord && (keyWord == '`' || keyWord == '~'))
-  {
-    bleKey.write(KEY_ESC);
-    dispSendKey2("Escape - 0x" + String(KEY_ESC, HEX));
-    return;
-  }
-
-  // **** modifies keys (ctrl,shift,alt,opt and fn) ******
-  // CTRL
-  if (key.ctrl)
-  {
-    bleKey.press(KEY_LEFT_CTRL);
-    modsDispStr += "Ctrl ";
-  }
-  // SHIFT
-  if (key.shift)
-  {
-    bleKey.press(KEY_LEFT_SHIFT);
-    modsDispStr += "Shift ";
-  }
-  // ALT
-  if (key.alt)
-  {
-    bleKey.press(KEY_LEFT_ALT);
-    modsDispStr += "Alt ";
-  }
-  // OPT (GUI Key)
-  if (key.opt)
-  {
-    bleKey.press(KEY_LEFT_GUI);
-    modsDispStr += "Opt ";
-  }
-  if (!modsDispStr.isEmpty())
-  {
-    modsDispStr.trim();
-  }
-  dispModsKeys(modsDispStr);
+  // --------------------------------------------------
 
   // *****  Regular Character Keys *****
   if (existWord)
@@ -280,14 +296,7 @@ void bleKeySend()
       {
         ucharStr.toUpperCase();
       }
-      else if (key.ctrl && !key.shift)
-      {
-        // ******  bug fixed  *************************************
-        // (ex) ctrl + 'a' ->  sent : ctrl + 'A'(upperCase)
-        // ********************************************************
-        ucharStr.toLowerCase();
-      }
-
+  
       bleKey.write(ucharStr[0]);
       dispSendKey(ucharStr + " - 0x" + String(ucharStr[0], HEX));
     }
