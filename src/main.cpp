@@ -38,20 +38,24 @@ void POWER_OFF();
 #define W_CHR 12  // 1 chara width
 
 //-------------------------------------
-SPIClass SPI2;
 BleKeyboard bleKey;
 m5::Keyboard_Class::KeysState keys_status;
-const String arrow_key[] = {"UpArrow", "DownArrow", "LeftArrow", "RightArrow"};
-// const unsigned long autoPowerOffTimeout = 20 * 60 * 1000L; // ms: wait for PowerOff
-const unsigned long autoPowerOffTimeout = 10 * 60 * 1000L; // ms: wait for PowerOff
-const unsigned long WARN_TM = 30 * 1000L;                  // ms: warning befor PowerOff
-unsigned long lastKeyInput = 0;
+SPIClass SPI2;
 
 static bool SD_ENABLE;
-static bool warnDispFlag = true;
 static bool capsLock = false;   // fn + 1  : CpasLock On/Off
 static bool cursorMode = false; // fn + 2  : CursorMode On/Off
 static bool bleConnect = false;
+const String arrow_key[] = {"UpArrow", "DownArrow", "LeftArrow", "RightArrow"};
+
+// -- auto PowerOff -----------
+unsigned long lastKeyInput = 0;
+const int apoTm[] = {3, 5, 10, 15, 20, 30, 999};  
+const String apoTmStr[] = {" 3m", " 5m", "10m", "15m", "20m", "30m", "off"};
+int apoTmIndex = 4; // 0 to 6
+unsigned long autoPowerOffTimeout = apoTm[apoTmIndex] * 60 * 1000L; // ms: wait for PowerOff
+const unsigned long WARN_TM = 30 * 1000L;                           // ms: warning befor PowerOff
+static bool warnDispFlag = true;
 
 void setup()
 {
@@ -70,11 +74,15 @@ void loop()
   M5Cardputer.update();
 
   if (checkKeyInput())
-  {
     bleKeySend();
-  }
 
   notifyBleConnect();
+
+  if (M5Cardputer.BtnA.wasPressed())
+  {
+    Serial.println("BtnG0 was Pressed");
+    lastKeyInput = millis();
+  }
   checkAutoPowerOff();
   delay(20);
 }
@@ -105,7 +113,7 @@ void bleKeySend()
 {
   m5::Keyboard_Class::KeysState key = keys_status;
   uint8_t mods = key.modifiers;
-  String modsDispStr = "";
+  // String modsDispStr = "";
   uint8_t keyWord = 0;
   bool existWord = key.word.empty() ? false : true;
   bool alredySentKey = false;
@@ -129,8 +137,8 @@ void bleKeySend()
     return;
   }
 
-  // Cursor Mode Toggle (Fn + '2')
-  if (key.fn && existWord && (keyWord == '2' || keyWord == '@'))
+  // Cursor Mode Toggle (Fn + '0')
+  if (key.fn && existWord && (keyWord == '0' || keyWord == ')'))
   {
     cursorMode = !cursorMode;
     dispState();
@@ -139,7 +147,18 @@ void bleKeySend()
     return;
   }
 
-  // **function Keys(Tab,Backspace, Delete, Enter, Esc, Home, End) ***
+  // Cursor Mode Toggle (Fn + '9')
+  if (key.fn && existWord && (keyWord == '9' || keyWord == '('))
+  {
+    apoTmIndex = apoTmIndex < 6 ? apoTmIndex + 1 : 0;
+    autoPowerOffTimeout = apoTm[apoTmIndex] * 60 * 1000L  ;
+    dispState();
+    bleKey.releaseAll();
+    dispModsCls();
+    return;
+  }
+
+  // ** Edit function Keys(Tab,Backspace, Delete, Enter, Esc, Home, End) ***
   // Tab
   if (key.tab)
   {
@@ -199,14 +218,15 @@ void bleKeySend()
   }
 
   // ** modifies keys (ctrl,shift,alt,Opt and fn) **
-  // these keys are uses other key conbination
+  // these keys are uses with other key (conbination keys)
   // ---------------------------------------------------
-  // fn : not sent, but disp modsDispStr
+  String modsDispStr = "";
+  // Fn : not sent, but special internal function key
   if (key.fn)
   {
     modsDispStr += "Fn ";
   }
-  
+
   // OPT (GUI Key)
   if (key.opt)
   {
@@ -269,7 +289,6 @@ void bleKeySend()
       arrowKeyAction = KEY_RIGHT_ARROW;
       arrowKeyIndex = 3;
     }
-
     if (arrowKeyAction != 0 && arrowKeyIndex != -1)
     {
       bleKey.write(arrowKeyAction);
@@ -278,7 +297,6 @@ void bleKeySend()
       alredySentKey = true;
     }
   }
-  
   if (alredySentKey)
   {
     bleKey.releaseAll();
@@ -291,14 +309,21 @@ void bleKeySend()
   {
     for (char k_char : key.word)
     {
-      String ucharStr = String(k_char);
+      String k1_char = String(k_char);
       if (capsLock)
       {
-        ucharStr.toUpperCase();
+        k1_char.toUpperCase();
       }
-  
-      bleKey.write(ucharStr[0]);
-      dispSendKey(ucharStr + " - 0x" + String(ucharStr[0], HEX));
+      // char k2_char = k1_char[0];
+      char k3_char = k1_char[0];
+
+      // #ifdef KB_DRV_JPN
+      //       k3_char = changeE2J(k2_char);
+      //       Serial.println("k2_char = " + String(k2_char) + " k3_char = " + String(k3_char));
+      // #endif
+
+      bleKey.write(k3_char);
+      dispSendKey(k3_char + " - 0x" + String(k3_char, HEX));
     }
     return;
   }
@@ -357,7 +382,7 @@ void dispLx(uint8_t Lx, String msg)
   // L0  "- tiney bleKeyborad -" : BLE info
   // L1    f1:Caps     f2:CurMd
   // L2   [un/lock]    [on/off]
-  // L3        --------
+  // L3   AutoPoffTm 
   // L4   modsKeys (shift/ctrl/alt/fn/opt)
   // L5   sendKey info
   // --------------------------------------------
@@ -405,14 +430,16 @@ void dispPowerOff()
 
 void dispState()
 { // Line2 : status
-  const String StCaps[] = {" unlock", "  lock"};
-  const String StCursorMode[] = {"   off", "   on"};
-
+//const String L1Str = "fn1:Cap 9:Apo 0:CurM";
+//----------------------01234567890123456789--- 
+  const String StCaps[] = {"unlock", " lock"};
+  const String StCursorMode[] = {"off", " on"};
+  
   int32_t line2 = 2 * H_CHR;
   M5Cardputer.Display.fillRect(0, line2, M5Cardputer.Display.width(), H_CHR, TFT_BLACK);
 
   // capsLock state
-  M5Cardputer.Display.setCursor(0, line2);
+  M5Cardputer.Display.setCursor(W_CHR * 1, line2);
   if (capsLock)
   {
     M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
@@ -424,8 +451,13 @@ void dispState()
     M5Cardputer.Display.print(StCaps[0]);
   }
 
+  // Auto PowerOff time
+  M5Cardputer.Display.setCursor(W_CHR * 9, line2);
+  M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5Cardputer.Display.print(apoTmStr[apoTmIndex]);
+  
   // cusror mode state
-  M5Cardputer.Display.setCursor(W_CHR * 8, line2);
+  M5Cardputer.Display.setCursor(W_CHR * 16, line2);
   if (cursorMode)
   {
     M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
@@ -436,7 +468,10 @@ void dispState()
     M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
     M5Cardputer.Display.print(StCursorMode[0]);
   }
+
   M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+
+  
 }
 
 void dispBleState()
@@ -463,7 +498,8 @@ void dispBleState()
 void dispStateInit()
 {
   //-------------------"01234567890123456789"------------------;
-  const String L1Str = "f1:Caps f2:CurMd";
+  // const String L1Str = "f1:Caps f0:CurMd" ;
+  const String L1Str = "fn1:Cap 9:Apo 0:CurM";
   //-------------------"01234567890123456789"------------------;
   dispBleState();
 
