@@ -37,22 +37,33 @@ void POWER_OFF();
 #define H_CHR 22  // 1 chara height
 #define W_CHR 12  // 1 chara width
 
+const uint8_t HIDKEY_UPARROW = 0x52;
+const uint8_t HIDKEY_DOWNARROW = 0x51;
+const uint8_t HIDKEY_LEFTARROW = 0x50;
+const uint8_t HIDKEY_RIGHTARROW = 0x4F;
+const uint8_t HIDKEY_ESC = 0x29;
+const uint8_t HIDKEY_HOME = 0x4A;
+const uint8_t HIDKEY_END = 0x4D;
+const uint8_t HIDKEY_DELETE = 0x4C;
+
 //-------------------------------------
 BleKeyboard bleKey;
+KeyReport bleKeyReport;
+
 m5::Keyboard_Class::KeysState keys_status;
 SPIClass SPI2;
 
 static bool SD_ENABLE;
-static bool capsLock = false;   // fn + 1  : CpasLock On/Off
-static bool cursorMode = false; // fn + 2  : CursorMode On/Off
+static bool capsLock = false; // fn + 1  : Cpas Lock On/Off
+static bool cursMode = false; // fn + 0  : Cursor moving Mode On/Off
 static bool bleConnect = false;
 const String arrow_key[] = {"UpArrow", "DownArrow", "LeftArrow", "RightArrow"};
 
-// -- auto PowerOff -----------
+// -- Auto Power Off  (fn + 9)  ----
 unsigned long lastKeyInput = 0;
-const int apoTm[] = {3, 5, 10, 15, 20, 30, 999};  
+const int apoTm[] = {3, 5, 10, 15, 20, 30, 999}; // auto Power off Time
 const String apoTmStr[] = {" 3m", " 5m", "10m", "15m", "20m", "30m", "off"};
-int apoTmIndex = 4; // 0 to 6
+int apoTmIndex = 4;                                                 // 0 to 6
 unsigned long autoPowerOffTimeout = apoTm[apoTmIndex] * 60 * 1000L; // ms: wait for PowerOff
 const unsigned long WARN_TM = 30 * 1000L;                           // ms: warning befor PowerOff
 static bool warnDispFlag = true;
@@ -113,7 +124,6 @@ void bleKeySend()
 {
   m5::Keyboard_Class::KeysState key = keys_status;
   uint8_t mods = key.modifiers;
-  // String modsDispStr = "";
   uint8_t keyWord = 0;
   bool existWord = key.word.empty() ? false : true;
   bool alredySentKey = false;
@@ -137,196 +147,233 @@ void bleKeySend()
     return;
   }
 
-  // Cursor Mode Toggle (Fn + '0')
+  // Cursor moving Mode Toggle (Fn + '0')
   if (key.fn && existWord && (keyWord == '0' || keyWord == ')'))
   {
-    cursorMode = !cursorMode;
+    cursMode = !cursMode;
     dispState();
     bleKey.releaseAll();
     dispModsCls();
     return;
   }
 
-  // Cursor Mode Toggle (Fn + '9')
+  // Auto PowerOff (Fn + '9')
   if (key.fn && existWord && (keyWord == '9' || keyWord == '('))
   {
     apoTmIndex = apoTmIndex < 6 ? apoTmIndex + 1 : 0;
-    autoPowerOffTimeout = apoTm[apoTmIndex] * 60 * 1000L  ;
+    autoPowerOffTimeout = apoTm[apoTmIndex] * 60 * 1000L;
     dispState();
     bleKey.releaseAll();
     dispModsCls();
     return;
   }
 
-  // ** Edit function Keys(Tab,Backspace, Delete, Enter, Esc, Home, End) ***
-  // Tab
-  if (key.tab)
-  {
-    bleKey.write(KEY_TAB);
-    bleKey.releaseAll();
-    dispSendKey2("Tab - 0x" + String(KEY_TAB, HEX));
-    return;
-  }
-  // Backspace
-  if (key.del && !key.fn)
-  { // Backspace : key.del and !key.fn
-    bleKey.write(KEY_BACKSPACE);
-    bleKey.releaseAll();
-    dispSendKey2("Backspace - 0x" + String(KEY_BACKSPACE, HEX));
-    return;
-  }
-  // Delete
-  else if (key.del && key.fn)
-  { // Delete : key.del and key.fn
-    bleKey.write(KEY_DELETE);
-    bleKey.releaseAll();
-    dispSendKey2("Delete - 0x" + String(KEY_DELETE, HEX));
-    return;
-  }
-  // Enter
-  if (key.enter)
-  {
-    bleKey.write(KEY_RETURN);
-    bleKey.releaseAll();
-    dispSendKey2("Enter - 0x" + String(KEY_RETURN, HEX));
-    return;
-  }
-  // Esc : fn + '`' or  '~'
-  if (key.fn && existWord && (keyWord == '`' || keyWord == '~'))
-  {
-    bleKey.write(KEY_ESC);
-    bleKey.releaseAll();
-    dispSendKey2("Escape - 0x" + String(KEY_ESC, HEX));
-    return;
-  }
   // ********** Home / End  ****************
   // Home Key  (Fn + '-' / '_')
-  if ((key.fn || cursorMode) && existWord && (keyWord == '-' || keyWord == '_'))
-  {
-    bleKey.write(KEY_HOME);
-    bleKey.releaseAll();
-    dispSendKey2("Home - 0x" + String(KEY_HOME, HEX));
-    return;
-  }
-  // End Key  (Fn + '=' / '+')
-  if ((key.fn || cursorMode) && existWord && (keyWord == '=' || keyWord == '+'))
-  {
-    bleKey.write(KEY_END);
-    bleKey.releaseAll();
-    dispSendKey2("End - 0x" + String(KEY_END, HEX));
-    return;
-  }
+  // if ((key.fn || cursMode) && existWord && (keyWord == '-' || keyWord == '_'))
+  // {
+  //   bleKey.write(KEY_HOME);
+  //   bleKey.releaseAll();
+  //   dispSendKey2("Home - 0x" + String(KEY_HOME, HEX));
+  //   return;
+  // }
+  // // End Key  (Fn + '=' / '+')
+  // if ((key.fn || cursMode) && existWord && (keyWord == '=' || keyWord == '+'))
+  // {
+  //   bleKey.write(KEY_END);
+  //   bleKey.releaseAll();
+  //   dispSendKey2("End - 0x" + String(KEY_END, HEX));
+  //   return;
+  // }
+
+  // Esc : fn + '`' or  '~'
+  // if (key.fn && existWord && (keyWord == '`' || keyWord == '~'))
+  // {
+  //   bleKey.write(KEY_ESC);
+  //   bleKey.releaseAll();
+  //   dispSendKey2("Escape - 0x" + String(KEY_ESC, HEX));
+  //   return;
+  // }
+
+  // // ** Edit function Keys(Tab,Backspace, Delete, Enter, Esc, Home, End) ***
+  // // Tab
+  // if (key.tab)
+  // {
+  //   bleKey.write(KEY_TAB);
+  //   bleKey.releaseAll();
+  //   dispSendKey2("Tab - 0x" + String(KEY_TAB, HEX));
+  //   return;
+  // }
+  // // Backspace
+  // if (key.del && !key.fn)
+  // { // Backspace : key.del and !key.fn
+  //   bleKey.write(KEY_BACKSPACE);
+  //   bleKey.releaseAll();
+  //   dispSendKey2("Backspace - 0x" + String(KEY_BACKSPACE, HEX));
+  //   return;
+  // }
+  // // Delete
+  // else if (key.del && key.fn)
+  // { // Delete : key.del and key.fn
+  //   bleKey.write(KEY_DELETE);
+  //   bleKey.releaseAll();
+  //   dispSendKey2("Delete - 0x" + String(KEY_DELETE, HEX));
+  //   return;
+  // }
+  // // Enter
+  // if (key.enter)
+  // {
+  //   bleKey.write(KEY_RETURN);
+  //   bleKey.releaseAll();
+  //   dispSendKey2("Enter - 0x" + String(KEY_RETURN, HEX));
+  //   return;
+  // }
 
   // ** modifies keys (ctrl,shift,alt,Opt and fn) **
   // these keys are uses with other key (conbination keys)
   // ---------------------------------------------------
+  // String modsDispStr = "";
+  // // Fn : not sent, but special internal function key
+  // if (key.fn)
+  // {
+  //   modsDispStr += "Fn ";
+  // }
+
+  // // OPT (GUI Key)
+  // if (key.opt)
+  // {
+  //   bleKey.press(KEY_LEFT_GUI);
+  //   modsDispStr += "Opt ";
+  // }
+
+  // // CTRL
+  // if (key.ctrl)
+  // {
+  //   bleKey.press(KEY_LEFT_CTRL);
+  //   modsDispStr += "Ctrl ";
+  // }
+
+  // // SHIFT
+  // if (key.shift)
+  // {
+  //   bleKey.press(KEY_LEFT_SHIFT);
+  //   modsDispStr += "Shift ";
+  // }
+  // // ALT
+  // if (key.alt)
+  // {
+  //   bleKey.press(KEY_LEFT_ALT);
+  //   modsDispStr += "Alt ";
+  // }
+  // if (!modsDispStr.isEmpty())
+  // {
+  //   modsDispStr.trim();
+  // }
+  // dispModsKeys(modsDispStr);
+
+  // ** modifies keys(ctrl,shift,alt) and Opt,fn  **
+  // use with other key
   String modsDispStr = "";
-  // Fn : not sent, but special internal function key
-  if (key.fn)
-  {
-    modsDispStr += "Fn ";
-  }
-
-  // OPT (GUI Key)
-  if (key.opt)
-  {
-    bleKey.press(KEY_LEFT_GUI);
-    modsDispStr += "Opt ";
-  }
-
-  // CTRL
   if (key.ctrl)
-  {
-    bleKey.press(KEY_LEFT_CTRL);
     modsDispStr += "Ctrl ";
-  }
-
-  // SHIFT
   if (key.shift)
-  {
-    bleKey.press(KEY_LEFT_SHIFT);
     modsDispStr += "Shift ";
-  }
-  // ALT
   if (key.alt)
-  {
-    bleKey.press(KEY_LEFT_ALT);
     modsDispStr += "Alt ";
-  }
-  if (!modsDispStr.isEmpty())
-  {
-    modsDispStr.trim();
-  }
+  if (key.fn)
+    modsDispStr += "Fn ";
+  if (key.opt)
+    modsDispStr += "Opt ";
   dispModsKeys(modsDispStr);
 
-  // **********  ARROW KEYS ****************
-  if ((key.fn || cursorMode) && existWord)
-  {
-    uint8_t arrowKeyAction = 0;
-    int arrowKeyIndex = -1;
-
-    // UpArrow
-    if (keyWord == ';' || keyWord == ':')
-    {
-      arrowKeyAction = KEY_UP_ARROW;
-      arrowKeyIndex = 0;
-    }
-    // DownArrow
-    else if (keyWord == '.' || keyWord == '>')
-    {
-      arrowKeyAction = KEY_DOWN_ARROW;
-      arrowKeyIndex = 1;
-    }
-    // LeftArrow
-    else if (keyWord == ',' || keyWord == '<')
-    {
-      arrowKeyAction = KEY_LEFT_ARROW;
-      arrowKeyIndex = 2;
-    }
-    // RightArrow
-    else if (keyWord == '/' || keyWord == '?')
-    {
-      arrowKeyAction = KEY_RIGHT_ARROW;
-      arrowKeyIndex = 3;
-    }
-    if (arrowKeyAction != 0 && arrowKeyIndex != -1)
-    {
-      bleKey.write(arrowKeyAction);
-      dispModsCls();
-      dispSendKey2(arrow_key[arrowKeyIndex] + " - 0x" + String(arrowKeyAction, HEX));
-      alredySentKey = true;
-    }
-  }
-  if (alredySentKey)
-  {
-    bleKey.releaseAll();
-    return;
-  }
-  // --------------------------------------------------
-
+  
   // *****  Regular Character Keys *****
-  if (existWord)
+  bleKeyReport = {0};
+  String msg = "";
+
+  // Keys
+  int count = 0;
+  for (auto hid_key : key.hid_keys)
   {
-    for (char k_char : key.word)
+    if (count < 6)
     {
-      String k1_char = String(k_char);
-      if (capsLock)
+      bool fixed = false;
+
+      if (key.fn)
       {
-        k1_char.toUpperCase();
+        switch (hid_key)
+        {
+        case 0x35: // '`'
+          hid_key = HIDKEY_ESC;
+          fixed = true;
+          break;
+
+        case 0x2A: // 'BACK'
+          hid_key = HIDKEY_DELETE;
+          fixed = true;
+          break;
+        }
       }
-      // char k2_char = k1_char[0];
-      char k3_char = k1_char[0];
 
-      // #ifdef KB_DRV_JPN
-      //       k3_char = changeE2J(k2_char);
-      //       Serial.println("k2_char = " + String(k2_char) + " k3_char = " + String(k3_char));
-      // #endif
+      // *** ARROW KEYS and Cursor moving mode ***
+      if (!fixed && (key.fn || cursMode))
+      {
+        switch (hid_key)
+        {
+        case 0x33: // ';'
+          hid_key = HIDKEY_UPARROW;
+          fixed = true;
+          break;
 
-      bleKey.write(k3_char);
-      dispSendKey(k3_char + " - 0x" + String(k3_char, HEX));
+        case 0x37: // '.'
+          hid_key = HIDKEY_DOWNARROW;
+          fixed = true;
+          break;
+
+        case 0x36: // ','
+          hid_key = HIDKEY_LEFTARROW;
+          fixed = true;
+          break;
+
+        case 0x38: // '/'
+          hid_key = HIDKEY_RIGHTARROW;
+          fixed = true;
+          break;
+
+        case 0x2d: // '-'
+          hid_key = HIDKEY_HOME;
+          fixed = true;
+          break;
+
+        case 0x2e: // '='
+          hid_key = HIDKEY_END;
+          fixed = true;
+          break;
+        }
+      }
+
+      bleKeyReport.keys[count] = hid_key;
+      msg += "0x" + String(hid_key, HEX) + String(" ");
+      count++;
     }
-    return;
   }
+
+  // Modifiers
+  uint8_t modifier = 0;
+  if (key.ctrl)
+    modifier |= 0x01;
+  if (key.shift)
+    modifier |= 0x02;
+  if (key.alt)
+    modifier |= 0x04;
+  bleKeyReport.modifiers = modifier;
+
+  // Send
+  bleKey.sendReport(&bleKeyReport);
+  dispSendKey(msg);
+  Serial.println(msg);
+  delay(50);
+  return;
 }
 
 static unsigned long PREV_bleChk_time = 0;
@@ -380,9 +427,9 @@ void dispLx(uint8_t Lx, String msg)
 {
   //----------  Lx is (0 to 5) ------------------
   // L0  "- tiney bleKeyborad -" : BLE info
-  // L1    f1:Caps     f2:CurMd
-  // L2   [un/lock]    [on/off]
-  // L3   AutoPoffTm 
+  // L1    f1:Caps   f9:AutoPower   f0:EditMode
+  // L2   [un/lock] [AutoPoffTm]   [on/off]
+  // L3    -----
   // L4   modsKeys (shift/ctrl/alt/fn/opt)
   // L5   sendKey info
   // --------------------------------------------
@@ -430,11 +477,11 @@ void dispPowerOff()
 
 void dispState()
 { // Line2 : status
-//const String L1Str = "fn1:Cap 9:Apo 0:CurM";
-//----------------------01234567890123456789--- 
+  // const String L1Str = "fn1:Cap 9:Apo 0:Edit";
+  //----------------------01234567890123456789---
   const String StCaps[] = {"unlock", " lock"};
-  const String StCursorMode[] = {"off", " on"};
-  
+  const String StEditMode[] = {"off", " on"};
+
   int32_t line2 = 2 * H_CHR;
   M5Cardputer.Display.fillRect(0, line2, M5Cardputer.Display.width(), H_CHR, TFT_BLACK);
 
@@ -455,23 +502,21 @@ void dispState()
   M5Cardputer.Display.setCursor(W_CHR * 9, line2);
   M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
   M5Cardputer.Display.print(apoTmStr[apoTmIndex]);
-  
-  // cusror mode state
+
+  // Edit mode state
   M5Cardputer.Display.setCursor(W_CHR * 16, line2);
-  if (cursorMode)
+  if (cursMode)
   {
     M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
-    M5Cardputer.Display.print(StCursorMode[1]);
+    M5Cardputer.Display.print(StEditMode[1]);
   }
   else
   {
     M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-    M5Cardputer.Display.print(StCursorMode[0]);
+    M5Cardputer.Display.print(StEditMode[0]);
   }
 
   M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-
-  
 }
 
 void dispBleState()
