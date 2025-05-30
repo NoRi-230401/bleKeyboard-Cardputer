@@ -77,11 +77,11 @@ const char *NVS_SETTING = "setting"; // NVS設定ファイル
 const String APO_TITLE = "apo";
 unsigned long lastKeyInput = 0;
 const int apoTm[] = {3, 5, 10, 15, 20, 30, 999}; // auto Power off Time
-const String apoTmStr[] = {" 3m", " 5m", "10m", "15m", "20m", "30m", "off"};
-uint8_t apoTmIndex = 4;                    // 0 to 6
-unsigned long apoTmout;                    // ms: auto powerOff(APO) timeout 
-const unsigned long WARN_TM = 30 * 1000L;  // ms: warning befor APO
-static bool warnDispFlag = true;
+const String apoTmStr[] = {" 3min", " 5min", "10min", "15min", "20min", "30min", " off "};
+uint8_t apoTmIndex = 4;                   // 0 to 6
+unsigned long apoTmout;                   // ms: auto powerOff(APO) timeout
+const unsigned long WARN_TM = 30 * 1000L; // ms: warning befor APO
+// static bool warnDispFlag = true;
 
 void setup()
 {
@@ -170,10 +170,10 @@ void bleSend()
     apoTmIndex = apoTmIndex < 6 ? apoTmIndex + 1 : 0;
     apoTmout = apoTm[apoTmIndex] * 60 * 1000L;
     dispState();
-    wrtNVS(APO_TITLE, apoTmIndex );
+    wrtNVS(APO_TITLE, apoTmIndex);
     Serial.println("apoTmIndex: " + String(apoTmIndex));
     Serial.println("autoPowerOff: " + apoTmStr[apoTmIndex]);
-    
+
     delay(50);
     bleKey.releaseAll();
     dispModsCls();
@@ -371,28 +371,53 @@ void notifyBleConnect()
   PREV_bleChk_time = millis();
 }
 
+static unsigned long prev_warn_time = 0L;
+static int apoStatus = 0;
+static bool warnDispFlag = true;
+
 void checkAutoPowerOff()
 {
   if (millis() > apoTmout + lastKeyInput)
-  {
+  { // powerOff : apoStatus =2
+    apoStatus=2;
     dispPowerOff();
     POWER_OFF();
   }
   else if (millis() > apoTmout + lastKeyInput - WARN_TM)
-  {
+  { // warning : apoStatus = 1
+    if(apoStatus==0)
+    {
+      prev_warn_time = millis();
+      apoStatus=1;
+    }
+
+    const unsigned long next_warn_time = 500L; // 500mSEC
+    if (millis() < prev_warn_time + next_warn_time)
+      return;
+
+    prev_warn_time = millis();
     if (warnDispFlag)
     {
       M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
-      dispLx(3, "  SLEEP TIME");
+      //-------- 01234567890123456789---
+      dispLx(3, "     SLEEP TIME     ");
       M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-      delay(500);
       warnDispFlag = !warnDispFlag;
-      dispLx(3, "");
     }
     else
     {
-      delay(500);
+      dispLx(3, "");
       warnDispFlag = !warnDispFlag;
+    }
+  }
+  else
+  { // normal : apoStatus = 0
+    if(apoStatus>0)
+    {
+      apoStatus=0;
+      warnDispFlag = true;
+      M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+      dispLx(3, "");
     }
   }
 }
@@ -444,7 +469,8 @@ void dispPowerOff()
   dispLx(1, "");
   dispLx(2, "");
   M5Cardputer.Display.setTextColor(TFT_RED, TFT_BLACK);
-  dispLx(3, "  POWER OFF");
+  //-------- 01234567890123456789---
+  dispLx(3, "     POWER OFF      ");
   dispLx(4, "");
   dispLx(5, "");
   delay(5000);
@@ -474,11 +500,11 @@ void dispState()
   }
 
   // Auto PowerOff time
-  M5Cardputer.Display.setCursor(W_CHR * 9, line2);
+  M5Cardputer.Display.setCursor(W_CHR * 8, line2);
   M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
   M5Cardputer.Display.print(apoTmStr[apoTmIndex]);
 
-  // Edit mode state
+  // Cursor moving mode state
   M5Cardputer.Display.setCursor(W_CHR * 16, line2);
   if (cursMode)
   {
@@ -633,12 +659,14 @@ void POWER_OFF()
 void apoSetup()
 {
   uint8_t data;
-  if(rdNVS(APO_TITLE, data))
-  {
+  if (rdNVS(APO_TITLE, data))
     apoTmIndex = data;
-  }
+
+  if (apoTmIndex > 6)
+    apoTmIndex = 4;
+
   apoTmout = apoTm[apoTmIndex] * 60 * 1000L;
-  wrtNVS(APO_TITLE, apoTmIndex );
+  wrtNVS(APO_TITLE, apoTmIndex);
   Serial.println("apoTmIndex: " + String(apoTmIndex));
   Serial.println("autoPowerOff: " + apoTmStr[apoTmIndex]);
 }
@@ -664,5 +692,5 @@ bool rdNVS(const String title, uint8_t &data)
     return true;
   }
   nvs_close(nvs);
-  return false;   
+  return false;
 }
