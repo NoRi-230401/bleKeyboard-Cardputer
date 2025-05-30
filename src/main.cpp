@@ -37,14 +37,25 @@ void POWER_OFF();
 #define H_CHR 22  // 1 chara height
 #define W_CHR 12  // 1 chara width
 
-const uint8_t HIDKEY_UPARROW = 0x52;
-const uint8_t HIDKEY_DOWNARROW = 0x51;
-const uint8_t HIDKEY_LEFTARROW = 0x50;
-const uint8_t HIDKEY_RIGHTARROW = 0x4F;
-const uint8_t HIDKEY_ESC = 0x29;
-const uint8_t HIDKEY_HOME = 0x4A;
-const uint8_t HIDKEY_END = 0x4D;
-const uint8_t HIDKEY_DELETE = 0x4C;
+// --- hid key-code define ---- 
+const uint8_t HID_UPARROW = 0x52;
+const uint8_t HID_DOWNARROW = 0x51;
+const uint8_t HID_LEFTARROW = 0x50;
+const uint8_t HID_RIGHTARROW = 0x4F;
+const uint8_t HID_ESC = 0x29;
+const uint8_t HID_DELETE = 0x4C;
+const uint8_t HID_HOME = 0x4A;
+const uint8_t HID_END = 0x4D;
+const uint8_t HID_PAGEUP = 0x4B;
+const uint8_t HID_PAGEDOWN = 0x4E;
+const uint8_t HID_INS = 0x49;
+const uint8_t HID_PRINTSC = 0x46;
+const uint8_t HID_F5 = 0x3E;
+const uint8_t HID_F6 = 0x3F;
+const uint8_t HID_F7 = 0x40;
+const uint8_t HID_F8 = 0x41;
+const uint8_t HID_F9 = 0x42;
+const uint8_t HID_F10 = 0x43;
 
 //-------------------------------------
 BleKeyboard bleKey;
@@ -57,7 +68,7 @@ static bool SD_ENABLE;
 static bool capsLock = false; // fn + 1  : Cpas Lock On/Off
 static bool cursMode = false; // fn + 0  : Cursor moving Mode On/Off
 static bool bleConnect = false;
-const String arrow_key[] = {"UpArrow", "DownArrow", "LeftArrow", "RightArrow"};
+// const String arrow_key[] = {"UpArrow", "DownArrow", "LeftArrow", "RightArrow"};
 
 // -- Auto Power Off  (fn + 9)  ----
 unsigned long lastKeyInput = 0;
@@ -126,7 +137,6 @@ void bleKeySend()
   uint8_t mods = key.modifiers;
   uint8_t keyWord = 0;
   bool existWord = key.word.empty() ? false : true;
-  bool alredySentKey = false;
 
   if (existWord)
   {
@@ -141,137 +151,38 @@ void bleKeySend()
   if (key.fn && existWord && (keyWord == '1' || keyWord == '!'))
   {
     capsLock = !capsLock;
+    bleKey.write(KEY_CAPS_LOCK);
+    delay(50);
     bleKey.releaseAll();
     dispState();
     dispModsCls();
     return;
   }
 
-  // Cursor moving Mode Toggle (Fn + '0')
-  if (key.fn && existWord && (keyWord == '0' || keyWord == ')'))
-  {
-    cursMode = !cursMode;
-    dispState();
-    bleKey.releaseAll();
-    dispModsCls();
-    return;
-  }
-
-  // Auto PowerOff (Fn + '9')
-  if (key.fn && existWord && (keyWord == '9' || keyWord == '('))
+  // Auto PowerOff (Fn + '2')
+  if (key.fn && existWord && (keyWord == '2' || keyWord == '@'))
   {
     apoTmIndex = apoTmIndex < 6 ? apoTmIndex + 1 : 0;
     autoPowerOffTimeout = apoTm[apoTmIndex] * 60 * 1000L;
     dispState();
+    delay(50);
     bleKey.releaseAll();
     dispModsCls();
     return;
   }
 
-  // ********** Home / End  ****************
-  // Home Key  (Fn + '-' / '_')
-  // if ((key.fn || cursMode) && existWord && (keyWord == '-' || keyWord == '_'))
-  // {
-  //   bleKey.write(KEY_HOME);
-  //   bleKey.releaseAll();
-  //   dispSendKey2("Home - 0x" + String(KEY_HOME, HEX));
-  //   return;
-  // }
-  // // End Key  (Fn + '=' / '+')
-  // if ((key.fn || cursMode) && existWord && (keyWord == '=' || keyWord == '+'))
-  // {
-  //   bleKey.write(KEY_END);
-  //   bleKey.releaseAll();
-  //   dispSendKey2("End - 0x" + String(KEY_END, HEX));
-  //   return;
-  // }
+  // Cursor moving Mode Toggle (Fn + '3')
+  if (key.fn && existWord && (keyWord == '3' || keyWord == '#'))
+  {
+    cursMode = !cursMode;
+    dispState();
+    delay(50);
+    bleKey.releaseAll();
+    dispModsCls();
+    return;
+  }
 
-  // Esc : fn + '`' or  '~'
-  // if (key.fn && existWord && (keyWord == '`' || keyWord == '~'))
-  // {
-  //   bleKey.write(KEY_ESC);
-  //   bleKey.releaseAll();
-  //   dispSendKey2("Escape - 0x" + String(KEY_ESC, HEX));
-  //   return;
-  // }
-
-  // // ** Edit function Keys(Tab,Backspace, Delete, Enter, Esc, Home, End) ***
-  // // Tab
-  // if (key.tab)
-  // {
-  //   bleKey.write(KEY_TAB);
-  //   bleKey.releaseAll();
-  //   dispSendKey2("Tab - 0x" + String(KEY_TAB, HEX));
-  //   return;
-  // }
-  // // Backspace
-  // if (key.del && !key.fn)
-  // { // Backspace : key.del and !key.fn
-  //   bleKey.write(KEY_BACKSPACE);
-  //   bleKey.releaseAll();
-  //   dispSendKey2("Backspace - 0x" + String(KEY_BACKSPACE, HEX));
-  //   return;
-  // }
-  // // Delete
-  // else if (key.del && key.fn)
-  // { // Delete : key.del and key.fn
-  //   bleKey.write(KEY_DELETE);
-  //   bleKey.releaseAll();
-  //   dispSendKey2("Delete - 0x" + String(KEY_DELETE, HEX));
-  //   return;
-  // }
-  // // Enter
-  // if (key.enter)
-  // {
-  //   bleKey.write(KEY_RETURN);
-  //   bleKey.releaseAll();
-  //   dispSendKey2("Enter - 0x" + String(KEY_RETURN, HEX));
-  //   return;
-  // }
-
-  // ** modifies keys (ctrl,shift,alt,Opt and fn) **
-  // these keys are uses with other key (conbination keys)
-  // ---------------------------------------------------
-  // String modsDispStr = "";
-  // // Fn : not sent, but special internal function key
-  // if (key.fn)
-  // {
-  //   modsDispStr += "Fn ";
-  // }
-
-  // // OPT (GUI Key)
-  // if (key.opt)
-  // {
-  //   bleKey.press(KEY_LEFT_GUI);
-  //   modsDispStr += "Opt ";
-  // }
-
-  // // CTRL
-  // if (key.ctrl)
-  // {
-  //   bleKey.press(KEY_LEFT_CTRL);
-  //   modsDispStr += "Ctrl ";
-  // }
-
-  // // SHIFT
-  // if (key.shift)
-  // {
-  //   bleKey.press(KEY_LEFT_SHIFT);
-  //   modsDispStr += "Shift ";
-  // }
-  // // ALT
-  // if (key.alt)
-  // {
-  //   bleKey.press(KEY_LEFT_ALT);
-  //   modsDispStr += "Alt ";
-  // }
-  // if (!modsDispStr.isEmpty())
-  // {
-  //   modsDispStr.trim();
-  // }
-  // dispModsKeys(modsDispStr);
-
-  // ** modifies keys(ctrl,shift,alt) and Opt,fn  **
+  // ** modifies keys(ctrl,shift,alt,) and fn  **
   // use with other key
   String modsDispStr = "";
   if (key.ctrl)
@@ -280,16 +191,15 @@ void bleKeySend()
     modsDispStr += "Shift ";
   if (key.alt)
     modsDispStr += "Alt ";
-  if (key.fn)
-    modsDispStr += "Fn ";
   if (key.opt)
     modsDispStr += "Opt ";
+  if (key.fn)
+    modsDispStr += "Fn ";
   dispModsKeys(modsDispStr);
 
-  
   // *****  Regular Character Keys *****
   bleKeyReport = {0};
-  String msg = "";
+  String hidCode = "";
 
   // Keys
   int count = 0;
@@ -304,12 +214,42 @@ void bleKeySend()
         switch (hid_key)
         {
         case 0x35: // '`'
-          hid_key = HIDKEY_ESC;
+          hid_key = HID_ESC;
           fixed = true;
           break;
 
         case 0x2A: // 'BACK'
-          hid_key = HIDKEY_DELETE;
+          hid_key = HID_DELETE;
+          fixed = true;
+          break;
+
+        case 0x22: // '5'
+          hid_key = HID_F5;
+          fixed = true;
+          break;
+
+        case 0x23: // '6'
+          hid_key = HID_F6;
+          fixed = true;
+          break;
+
+        case 0x24: // '7'
+          hid_key = HID_F7;
+          fixed = true;
+          break;
+
+        case 0x25: // '8'
+          hid_key = HID_F8;
+          fixed = true;
+          break;
+
+        case 0x26: // '9'
+          hid_key = HID_F9;
+          fixed = true;
+          break;
+
+        case 0x27: // '0'
+          hid_key = HID_F10;
           fixed = true;
           break;
         }
@@ -321,44 +261,64 @@ void bleKeySend()
         switch (hid_key)
         {
         case 0x33: // ';'
-          hid_key = HIDKEY_UPARROW;
+          hid_key = HID_UPARROW;
           fixed = true;
           break;
 
         case 0x37: // '.'
-          hid_key = HIDKEY_DOWNARROW;
+          hid_key = HID_DOWNARROW;
           fixed = true;
           break;
 
         case 0x36: // ','
-          hid_key = HIDKEY_LEFTARROW;
+          hid_key = HID_LEFTARROW;
           fixed = true;
           break;
 
         case 0x38: // '/'
-          hid_key = HIDKEY_RIGHTARROW;
+          hid_key = HID_RIGHTARROW;
           fixed = true;
           break;
 
         case 0x2d: // '-'
-          hid_key = HIDKEY_HOME;
+          hid_key = HID_HOME;
+          fixed = true;
+          break;
+
+        case 0x2f: // '['
+          hid_key = HID_END;
           fixed = true;
           break;
 
         case 0x2e: // '='
-          hid_key = HIDKEY_END;
+          hid_key = HID_PAGEUP;
+          fixed = true;
+          break;
+
+        case 0x30: // ']'
+          hid_key = HID_PAGEDOWN;
+          fixed = true;
+          break;
+
+        case 0x31: // '\'
+          hid_key = HID_INS;
+          fixed = true;
+          break;
+
+        case 0x34: // '''
+          hid_key = HID_PRINTSC;
           fixed = true;
           break;
         }
       }
 
       bleKeyReport.keys[count] = hid_key;
-      msg += "0x" + String(hid_key, HEX) + String(" ");
+      hidCode += "0x" + String(hid_key, HEX) + String(" ");
       count++;
     }
   }
 
-  // Modifiers
+  // Set Modifiers
   uint8_t modifier = 0;
   if (key.ctrl)
     modifier |= 0x01;
@@ -366,12 +326,21 @@ void bleKeySend()
     modifier |= 0x02;
   if (key.alt)
     modifier |= 0x04;
+  if (key.opt)
+    modifier |= 0x08;
   bleKeyReport.modifiers = modifier;
 
   // Send
   bleKey.sendReport(&bleKeyReport);
-  dispSendKey(msg);
-  Serial.println(msg);
+
+  if (count > 0)
+  {
+    dispSendKey(hidCode);
+    Serial.println("HID: " + hidCode);
+  }
+  else
+    dispLx(5,"");
+
   delay(50);
   return;
 }
@@ -427,11 +396,11 @@ void dispLx(uint8_t Lx, String msg)
 {
   //----------  Lx is (0 to 5) ------------------
   // L0  "- tiney bleKeyborad -" : BLE info
-  // L1    f1:Caps   f9:AutoPower   f0:EditMode
+  // L1    f1:Caps   f2:AutoPower   f3:EditMode
   // L2   [un/lock] [AutoPoffTm]   [on/off]
   // L3    -----
-  // L4   modsKeys (shift/ctrl/alt/fn/opt)
-  // L5   sendKey info
+  // L4   modsKeys (Shift/Ctrl/Alt/Opt/Fn)
+  // L5   sendKye info(hid code)
   // --------------------------------------------
   if (Lx < 0 || Lx > 5)
     return;
@@ -442,7 +411,7 @@ void dispLx(uint8_t Lx, String msg)
 }
 
 void dispModsKeys(String msg)
-{ // line4 : modifiers keys (ctrl/alt/shift and /fn/opt)
+{ // line4 : modifiers keys(Shift/Ctrl/Alt/Opt/Fn)
   dispLx(4, msg);
 }
 
@@ -454,7 +423,7 @@ void dispModsCls()
 
 void dispSendKey(String msg)
 { // line5 : normal character send info
-  dispLx(5, " SendKey: " + msg);
+  dispLx(5, " HID Code: " + msg);
 }
 
 void dispSendKey2(String msg)
@@ -477,8 +446,8 @@ void dispPowerOff()
 
 void dispState()
 { // Line2 : status
-  // const String L1Str = "fn1:Cap 9:Apo 0:Edit";
-  //----------------------01234567890123456789---
+  // const String L1Str = "fn1:Cap 2:Apo 3:CurM";
+  //---------------------- 01234567890123456789---
   const String StCaps[] = {"unlock", " lock"};
   const String StEditMode[] = {"off", " on"};
 
@@ -543,8 +512,7 @@ void dispBleState()
 void dispStateInit()
 {
   //-------------------"01234567890123456789"------------------;
-  // const String L1Str = "f1:Caps f0:CurMd" ;
-  const String L1Str = "fn1:Cap 9:Apo 0:CurM";
+  const String L1Str = "fn1:Cap 2:Apo 3:CurM";
   //-------------------"01234567890123456789"------------------;
   dispBleState();
 
