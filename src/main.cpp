@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <SD.h>
+#include <nvs.h>
 #include <BleKeyboard.h>
 #include <M5Cardputer.h>
 #include <M5StackUpdater.h>
@@ -8,8 +9,8 @@
 
 void setup();
 void loop();
-bool checkKeyInput();
-void bleKeySend();
+bool checkCpKeyIn();
+void bleSend();
 void notifyBleConnect();
 void checkAutoPowerOff();
 void dispLx(uint8_t Lx, String msg);
@@ -26,6 +27,9 @@ void m5stack_begin();
 void SDU_lobby();
 bool SD_begin();
 void POWER_OFF();
+void apoSetup();
+bool wrtNVS(const String title, uint8_t data);
+bool rdNVS(const String title, uint8_t &data);
 
 // -- Cardputer display define -------
 #define X_WIDTH 240
@@ -37,7 +41,7 @@ void POWER_OFF();
 #define H_CHR 22  // 1 chara height
 #define W_CHR 12  // 1 chara width
 
-// --- hid key-code define ---- 
+// --- hid key-code define ----
 const uint8_t HID_UPARROW = 0x52;
 const uint8_t HID_DOWNARROW = 0x51;
 const uint8_t HID_LEFTARROW = 0x50;
@@ -60,23 +64,23 @@ const uint8_t HID_F10 = 0x43;
 //-------------------------------------
 BleKeyboard bleKey;
 KeyReport bleKeyReport;
-
 m5::Keyboard_Class::KeysState keys_status;
 SPIClass SPI2;
-
 static bool SD_ENABLE;
 static bool capsLock = false; // fn + 1  : Cpas Lock On/Off
-static bool cursMode = false; // fn + 0  : Cursor moving Mode On/Off
+static bool cursMode = false; // fn + 2  : Cursor moving Mode On/Off
 static bool bleConnect = false;
-// const String arrow_key[] = {"UpArrow", "DownArrow", "LeftArrow", "RightArrow"};
 
-// -- Auto Power Off  (fn + 9)  ----
+// -- Auto Power Off(APO) --- (fn + 9)  ----
+nvs_handle_t nvs;
+const char *NVS_SETTING = "setting"; // NVS設定ファイル
+const String APO_TITLE = "apo";
 unsigned long lastKeyInput = 0;
 const int apoTm[] = {3, 5, 10, 15, 20, 30, 999}; // auto Power off Time
 const String apoTmStr[] = {" 3m", " 5m", "10m", "15m", "20m", "30m", "off"};
-int apoTmIndex = 4;                                                 // 0 to 6
-unsigned long autoPowerOffTimeout = apoTm[apoTmIndex] * 60 * 1000L; // ms: wait for PowerOff
-const unsigned long WARN_TM = 30 * 1000L;                           // ms: warning befor PowerOff
+uint8_t apoTmIndex = 4;                    // 0 to 6
+unsigned long apoTmout;                    // ms: auto powerOff(APO) timeout 
+const unsigned long WARN_TM = 30 * 1000L;  // ms: warning befor APO
 static bool warnDispFlag = true;
 
 void setup()
@@ -86,6 +90,7 @@ void setup()
     SDU_lobby();
 
   bleKey.begin();
+  apoSetup();
   dispInit();
   lastKeyInput = millis();
   Serial.println("Cardputer Started!");
@@ -95,8 +100,8 @@ void loop()
 {
   M5Cardputer.update();
 
-  if (checkKeyInput())
-    bleKeySend();
+  if (checkCpKeyIn())
+    bleSend();
 
   notifyBleConnect();
 
@@ -109,8 +114,8 @@ void loop()
   delay(20);
 }
 
-bool checkKeyInput()
-{
+bool checkCpKeyIn()
+{ // check Cardputer key input
   if (M5Cardputer.Keyboard.isChange())
   {
     lastKeyInput = millis();
@@ -131,7 +136,7 @@ bool checkKeyInput()
   return false;
 }
 
-void bleKeySend()
+void bleSend()
 {
   m5::Keyboard_Class::KeysState key = keys_status;
   uint8_t mods = key.modifiers;
@@ -146,7 +151,7 @@ void bleKeySend()
   else
     Serial.printf("key.word is empty, modifiers: 0x%X\n", mods);
 
-  // ****** [fn] Mode Selection (High Priority) **************
+  // ****** [fn] special mode Selection (High Priority) **************
   // Caps Lock Toggle (Fn + '1')
   if (key.fn && existWord && (keyWord == '1' || keyWord == '!'))
   {
@@ -159,12 +164,16 @@ void bleKeySend()
     return;
   }
 
-  // Auto PowerOff (Fn + '2')
+  // APO(Auto PowerOff) ---- (Fn + '2')
   if (key.fn && existWord && (keyWord == '2' || keyWord == '@'))
   {
     apoTmIndex = apoTmIndex < 6 ? apoTmIndex + 1 : 0;
-    autoPowerOffTimeout = apoTm[apoTmIndex] * 60 * 1000L;
+    apoTmout = apoTm[apoTmIndex] * 60 * 1000L;
     dispState();
+    wrtNVS(APO_TITLE, apoTmIndex );
+    Serial.println("apoTmIndex: " + String(apoTmIndex));
+    Serial.println("autoPowerOff: " + apoTmStr[apoTmIndex]);
+    
     delay(50);
     bleKey.releaseAll();
     dispModsCls();
@@ -182,8 +191,8 @@ void bleKeySend()
     return;
   }
 
-  // ** modifies keys(ctrl,shift,alt,) and fn  **
-  // use with other key
+  // ** disp modifies keys(ctrl,shift,alt,) and fn  **
+  //  these keys are used with other key
   String modsDispStr = "";
   if (key.ctrl)
     modsDispStr += "Ctrl ";
@@ -199,11 +208,11 @@ void bleKeySend()
 
   // *****  Regular Character Keys *****
   bleKeyReport = {0};
-  String hidCode = "";
+  String hidCodeStr = "";
 
   // Keys
   int count = 0;
-  for (auto hid_key : key.hid_keys)
+  for (auto hidCode : key.hid_keys)
   {
     if (count < 6)
     {
@@ -211,45 +220,45 @@ void bleKeySend()
 
       if (key.fn)
       {
-        switch (hid_key)
+        switch (hidCode)
         {
         case 0x35: // '`'
-          hid_key = HID_ESC;
+          hidCode = HID_ESC;
           fixed = true;
           break;
 
         case 0x2A: // 'BACK'
-          hid_key = HID_DELETE;
+          hidCode = HID_DELETE;
           fixed = true;
           break;
 
         case 0x22: // '5'
-          hid_key = HID_F5;
+          hidCode = HID_F5;
           fixed = true;
           break;
 
         case 0x23: // '6'
-          hid_key = HID_F6;
+          hidCode = HID_F6;
           fixed = true;
           break;
 
         case 0x24: // '7'
-          hid_key = HID_F7;
+          hidCode = HID_F7;
           fixed = true;
           break;
 
         case 0x25: // '8'
-          hid_key = HID_F8;
+          hidCode = HID_F8;
           fixed = true;
           break;
 
         case 0x26: // '9'
-          hid_key = HID_F9;
+          hidCode = HID_F9;
           fixed = true;
           break;
 
         case 0x27: // '0'
-          hid_key = HID_F10;
+          hidCode = HID_F10;
           fixed = true;
           break;
         }
@@ -258,62 +267,62 @@ void bleKeySend()
       // *** ARROW KEYS and Cursor moving mode ***
       if (!fixed && (key.fn || cursMode))
       {
-        switch (hid_key)
+        switch (hidCode)
         {
         case 0x33: // ';'
-          hid_key = HID_UPARROW;
+          hidCode = HID_UPARROW;
           fixed = true;
           break;
 
         case 0x37: // '.'
-          hid_key = HID_DOWNARROW;
+          hidCode = HID_DOWNARROW;
           fixed = true;
           break;
 
         case 0x36: // ','
-          hid_key = HID_LEFTARROW;
+          hidCode = HID_LEFTARROW;
           fixed = true;
           break;
 
         case 0x38: // '/'
-          hid_key = HID_RIGHTARROW;
+          hidCode = HID_RIGHTARROW;
           fixed = true;
           break;
 
         case 0x2d: // '-'
-          hid_key = HID_HOME;
+          hidCode = HID_HOME;
           fixed = true;
           break;
 
         case 0x2f: // '['
-          hid_key = HID_END;
+          hidCode = HID_END;
           fixed = true;
           break;
 
         case 0x2e: // '='
-          hid_key = HID_PAGEUP;
+          hidCode = HID_PAGEUP;
           fixed = true;
           break;
 
         case 0x30: // ']'
-          hid_key = HID_PAGEDOWN;
+          hidCode = HID_PAGEDOWN;
           fixed = true;
           break;
 
         case 0x31: // '\'
-          hid_key = HID_INS;
+          hidCode = HID_INS;
           fixed = true;
           break;
 
         case 0x34: // '''
-          hid_key = HID_PRINTSC;
+          hidCode = HID_PRINTSC;
           fixed = true;
           break;
         }
       }
 
-      bleKeyReport.keys[count] = hid_key;
-      hidCode += "0x" + String(hid_key, HEX) + String(" ");
+      bleKeyReport.keys[count] = hidCode;
+      hidCodeStr += "0x" + String(hidCode, HEX) + String(" ");
       count++;
     }
   }
@@ -332,14 +341,10 @@ void bleKeySend()
 
   // Send
   bleKey.sendReport(&bleKeyReport);
-
   if (count > 0)
-  {
-    dispSendKey(hidCode);
-    Serial.println("HID: " + hidCode);
-  }
+    dispSendKey(hidCodeStr);
   else
-    dispLx(5,"");
+    dispLx(5, "");
 
   delay(50);
   return;
@@ -368,12 +373,12 @@ void notifyBleConnect()
 
 void checkAutoPowerOff()
 {
-  if (millis() > autoPowerOffTimeout + lastKeyInput)
+  if (millis() > apoTmout + lastKeyInput)
   {
     dispPowerOff();
     POWER_OFF();
   }
-  else if (millis() > autoPowerOffTimeout + lastKeyInput - WARN_TM)
+  else if (millis() > apoTmout + lastKeyInput - WARN_TM)
   {
     if (warnDispFlag)
     {
@@ -423,7 +428,8 @@ void dispModsCls()
 
 void dispSendKey(String msg)
 { // line5 : normal character send info
-  dispLx(5, " HID Code: " + msg);
+  dispLx(5, "hid: " + msg);
+  Serial.println("hid: " + msg);
 }
 
 void dispSendKey2(String msg)
@@ -534,7 +540,6 @@ void dispInit()
   M5Cardputer.Display.setTextWrap(false);
   M5Cardputer.Display.setCursor(0, 0);
 
-  // M5Cardputer.Display.println("- " + PROG_NAME + " -");
   dispStateInit();
 }
 
@@ -623,4 +628,41 @@ void POWER_OFF()
   { // never
     delay(1000);
   }
+}
+
+void apoSetup()
+{
+  uint8_t data;
+  if(rdNVS(APO_TITLE, data))
+  {
+    apoTmIndex = data;
+  }
+  apoTmout = apoTm[apoTmIndex] * 60 * 1000L;
+  wrtNVS(APO_TITLE, apoTmIndex );
+  Serial.println("apoTmIndex: " + String(apoTmIndex));
+  Serial.println("autoPowerOff: " + apoTmStr[apoTmIndex]);
+}
+
+bool wrtNVS(const String title, uint8_t data)
+{
+  if (ESP_OK == nvs_open(NVS_SETTING, NVS_READWRITE, &nvs))
+  {
+    nvs_set_u8(nvs, title.c_str(), data);
+    nvs_close(nvs);
+    return true;
+  }
+  nvs_close(nvs);
+  return false;
+}
+
+bool rdNVS(const String title, uint8_t &data)
+{
+  if (ESP_OK == nvs_open(NVS_SETTING, NVS_READONLY, &nvs))
+  {
+    nvs_get_u8(nvs, title.c_str(), &data);
+    nvs_close(nvs);
+    return true;
+  }
+  nvs_close(nvs);
+  return false;   
 }
