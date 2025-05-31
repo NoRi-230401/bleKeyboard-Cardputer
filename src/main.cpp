@@ -9,10 +9,10 @@
 
 void setup();
 void loop();
-bool checkCpKeyIn();
+bool checkInput();
 void bleSend();
 void notifyBleConnect();
-void checkAutoPowerOff();
+void powerSave();
 void dispLx(uint8_t Lx, String msg);
 void dispModsKeys(String msg);
 void dispModsCls();
@@ -21,15 +21,15 @@ void dispSendKey2(String msg);
 void dispPowerOff();
 void dispState();
 void dispBleState();
-void dispStateInit();
 void dispInit();
 void m5stack_begin();
 void SDU_lobby();
 bool SD_begin();
 void POWER_OFF();
-void apoSetup();
+void apoInit();
 bool wrtNVS(const String title, uint8_t data);
 bool rdNVS(const String title, uint8_t &data);
+void dispBatteryLevel();
 
 // -- Cardputer display define -------
 #define X_WIDTH 240
@@ -71,17 +71,19 @@ static bool capsLock = false; // fn + 1  : Cpas Lock On/Off
 static bool cursMode = false; // fn + 2  : Cursor moving Mode On/Off
 static bool bleConnect = false;
 
-// -- Auto Power Off(APO) --- (fn + 9)  ----
+// -- Auto Power Off(APO) --- (fn + 3)  ----
 nvs_handle_t nvs;
-const char *NVS_SETTING = "setting"; // NVS設定ファイル
+const char *NVS_SETTING = "setting";
 const String APO_TITLE = "apo";
+const int apoTm[] = {1, 2, 3, 5, 10, 15, 20, 30, 999}; // auto Power off Time
+const String apoTmStr[] = {" 1min", " 2min", " 3min", " 5min", "10min", "15min", "20min", "30min", " off "};
+const uint8_t apoTmMax = 8;
+const uint8_t apoTmDefault = 6;
+uint8_t apoTmIndex = apoTmDefault;
+unsigned long apoTmout; // ms: auto powerOff(APO) timeout
 unsigned long lastKeyInput = 0;
-const int apoTm[] = {3, 5, 10, 15, 20, 30, 999}; // auto Power off Time
-const String apoTmStr[] = {" 3min", " 5min", "10min", "15min", "20min", "30min", " off "};
-uint8_t apoTmIndex = 4;                   // 0 to 6
-unsigned long apoTmout;                   // ms: auto powerOff(APO) timeout
-const unsigned long WARN_TM = 30 * 1000L; // ms: warning befor APO
-// static bool warnDispFlag = true;
+const uint8_t NORMAL_BRIGHT = 70;
+const uint8_t LOW_BRIGHT = 20;
 
 void setup()
 {
@@ -90,35 +92,30 @@ void setup()
     SDU_lobby();
 
   bleKey.begin();
-  apoSetup();
-  dispInit();
+  apoInit();  // Auto PowerOff initialize
+  dispInit(); // display initialize
+
   lastKeyInput = millis();
-  Serial.println("Cardputer Started!");
 }
 
 void loop()
 {
   M5Cardputer.update();
 
-  if (checkCpKeyIn())
-    bleSend();
+  if (checkInput()) // check Cardputer key input
+    bleSend();      // if so, send data via bluetooth
 
-  notifyBleConnect();
-
-  if (M5Cardputer.BtnA.wasPressed())
-  {
-    Serial.println("BtnG0 was Pressed");
-    lastKeyInput = millis();
-  }
-  checkAutoPowerOff();
+  notifyBleConnect(); // check bluetooth connection
+  powerSave();        // battery and power save
   delay(20);
 }
 
-bool checkCpKeyIn()
+bool checkInput()
 { // check Cardputer key input
   if (M5Cardputer.Keyboard.isChange())
   {
     lastKeyInput = millis();
+    // Serial.println("Cardputer Keyboad is Changed");
 
     if (M5Cardputer.Keyboard.isPressed())
     {
@@ -133,6 +130,13 @@ bool checkCpKeyIn()
       dispModsCls();
     }
   }
+
+  if (M5Cardputer.BtnA.wasPressed())
+  {
+    lastKeyInput = millis();
+    Serial.println("BtnG0 was Pressed");
+  }
+
   return false;
 }
 
@@ -142,10 +146,12 @@ void bleSend()
   uint8_t mods = key.modifiers;
   uint8_t keyWord = 0;
   bool existWord = key.word.empty() ? false : true;
+  String sendWord = "";
 
   if (existWord)
   {
     keyWord = key.word[0];
+    sendWord = " " + String(key.word[0]) + " :hid";
     Serial.printf("key.word[0]: %c (0x%X), modifiers: 0x%X\n", keyWord, keyWord, mods);
   }
   else
@@ -164,27 +170,27 @@ void bleSend()
     return;
   }
 
-  // APO(Auto PowerOff) ---- (Fn + '2')
+  // Cursor moving Mode Toggle (Fn + '2')
   if (key.fn && existWord && (keyWord == '2' || keyWord == '@'))
   {
-    apoTmIndex = apoTmIndex < 6 ? apoTmIndex + 1 : 0;
-    apoTmout = apoTm[apoTmIndex] * 60 * 1000L;
+    cursMode = !cursMode;
     dispState();
-    wrtNVS(APO_TITLE, apoTmIndex);
-    Serial.println("apoTmIndex: " + String(apoTmIndex));
-    Serial.println("autoPowerOff: " + apoTmStr[apoTmIndex]);
-
     delay(50);
     bleKey.releaseAll();
     dispModsCls();
     return;
   }
 
-  // Cursor moving Mode Toggle (Fn + '3')
+  // APO(Auto PowerOff) ---- (Fn + '3')
   if (key.fn && existWord && (keyWord == '3' || keyWord == '#'))
   {
-    cursMode = !cursMode;
+    apoTmIndex = apoTmIndex < apoTmMax ? apoTmIndex + 1 : 0;
+    apoTmout = apoTm[apoTmIndex] * 60 * 1000L;
     dispState();
+    wrtNVS(APO_TITLE, apoTmIndex);
+    // Serial.println("apoTmIndex: " + String(apoTmIndex));
+    Serial.println("autoPowerOff: " + apoTmStr[apoTmIndex]);
+
     delay(50);
     bleKey.releaseAll();
     dispModsCls();
@@ -208,7 +214,7 @@ void bleSend()
 
   // *****  Regular Character Keys *****
   bleKeyReport = {0};
-  String hidCodeStr = "";
+  // String sendWord = "";
 
   // Keys
   int count = 0;
@@ -322,7 +328,7 @@ void bleSend()
       }
 
       bleKeyReport.keys[count] = hidCode;
-      hidCodeStr += "0x" + String(hidCode, HEX) + String(" ");
+      sendWord += " 0x" + String(hidCode, HEX);
       count++;
     }
   }
@@ -341,8 +347,14 @@ void bleSend()
 
   // Send
   bleKey.sendReport(&bleKeyReport);
-  if (count > 0)
-    dispSendKey(hidCodeStr);
+
+  if (!sendWord.isEmpty())
+  {
+    if (existWord)
+      dispSendKey(sendWord);
+    else
+      dispSendKey("hid" + sendWord);
+  }
   else
     dispLx(5, "");
 
@@ -350,12 +362,14 @@ void bleSend()
   return;
 }
 
-static unsigned long PREV_bleChk_time = 0;
+static unsigned long PREV_BLECHK_TM = 0;
 void notifyBleConnect()
 {
-  const unsigned long next_check_time = 1009L; // 1000以上で１番小さい素数にした
-  if (millis() < PREV_bleChk_time + next_check_time)
+  const unsigned long next_check_tm = 1009L; // 1000以上で１番小さい素数にした
+  if (millis() < PREV_BLECHK_TM + next_check_tm)
     return;
+
+  PREV_BLECHK_TM = millis();
 
   if (bleKey.isConnected() && !bleConnect)
   {
@@ -366,59 +380,6 @@ void notifyBleConnect()
   {
     bleConnect = false;
     dispBleState();
-  }
-
-  PREV_bleChk_time = millis();
-}
-
-static unsigned long prev_warn_time = 0L;
-static int apoStatus = 0;
-static bool warnDispFlag = true;
-
-void checkAutoPowerOff()
-{
-  if (millis() > apoTmout + lastKeyInput)
-  { // powerOff : apoStatus =2
-    apoStatus=2;
-    dispPowerOff();
-    POWER_OFF();
-  }
-  else if (millis() > apoTmout + lastKeyInput - WARN_TM)
-  { // warning : apoStatus = 1
-    if(apoStatus==0)
-    {
-      prev_warn_time = millis();
-      apoStatus=1;
-    }
-
-    const unsigned long next_warn_time = 500L; // 500mSEC
-    if (millis() < prev_warn_time + next_warn_time)
-      return;
-
-    prev_warn_time = millis();
-    if (warnDispFlag)
-    {
-      M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
-      //-------- 01234567890123456789---
-      dispLx(3, "     SLEEP TIME     ");
-      M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-      warnDispFlag = !warnDispFlag;
-    }
-    else
-    {
-      dispLx(3, "");
-      warnDispFlag = !warnDispFlag;
-    }
-  }
-  else
-  { // normal : apoStatus = 0
-    if(apoStatus>0)
-    {
-      apoStatus=0;
-      warnDispFlag = true;
-      M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-      dispLx(3, "");
-    }
   }
 }
 
@@ -453,8 +414,8 @@ void dispModsCls()
 
 void dispSendKey(String msg)
 { // line5 : normal character send info
-  dispLx(5, "hid: " + msg);
-  Serial.println("hid: " + msg);
+  dispLx(5, msg);
+  Serial.println(msg);
 }
 
 void dispSendKey2(String msg)
@@ -473,21 +434,24 @@ void dispPowerOff()
   dispLx(3, "     POWER OFF      ");
   dispLx(4, "");
   dispLx(5, "");
-  delay(5000);
+  delay(2000);
 }
 
 void dispState()
-{ // Line2 : status
-  // const String L1Str = "fn1:Cap 2:Apo 3:CurM";
+{ // Line2
+  //---------------------- 01234567890123456789---
+  // _____________L1______"             bt:100%";
+  // const String L2Str = "fn1:Cap 2:CurM 3:Apo" ;
+  // _____________L3______" unlock   off  30min";
   //---------------------- 01234567890123456789---
   const String StCaps[] = {"unlock", " lock"};
   const String StEditMode[] = {"off", " on"};
+  const int32_t line3 = 3 * H_CHR;
 
-  int32_t line2 = 2 * H_CHR;
-  M5Cardputer.Display.fillRect(0, line2, M5Cardputer.Display.width(), H_CHR, TFT_BLACK);
+  M5Cardputer.Display.fillRect(0, line3, M5Cardputer.Display.width(), H_CHR, TFT_BLACK);
 
   // capsLock state
-  M5Cardputer.Display.setCursor(W_CHR * 1, line2);
+  M5Cardputer.Display.setCursor(W_CHR * 1, line3);
   if (capsLock)
   {
     M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
@@ -499,13 +463,8 @@ void dispState()
     M5Cardputer.Display.print(StCaps[0]);
   }
 
-  // Auto PowerOff time
-  M5Cardputer.Display.setCursor(W_CHR * 8, line2);
-  M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-  M5Cardputer.Display.print(apoTmStr[apoTmIndex]);
-
   // Cursor moving mode state
-  M5Cardputer.Display.setCursor(W_CHR * 16, line2);
+  M5Cardputer.Display.setCursor(W_CHR * 10, line3);
   if (cursMode)
   {
     M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
@@ -516,6 +475,11 @@ void dispState()
     M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
     M5Cardputer.Display.print(StEditMode[0]);
   }
+
+  // Auto PowerOff time
+  M5Cardputer.Display.setCursor(W_CHR * 15, line3);
+  M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5Cardputer.Display.print(apoTmStr[apoTmIndex]);
 
   M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
 }
@@ -541,32 +505,73 @@ void dispBleState()
   M5Cardputer.Display.print("Keyboard -");
 }
 
-void dispStateInit()
-{
-  //-------------------"01234567890123456789"------------------;
-  const String L1Str = "fn1:Cap 2:Apo 3:CurM";
-  //-------------------"01234567890123456789"------------------;
-  dispBleState();
+void dispBatteryLevel()
+{ // Line1
+  //---------------------- 01234567890123456789---
+  // _____________L1______"            bat.100%";
+  // const String L2Str = "fn1:Cap 3:CurM 2:Apo" ;
+  // _____________L3______" unlock   off  30min";
+  //---------------------- 01234567890123456789---
+  const int32_t line1 = 1 * H_CHR;
 
-  M5Cardputer.Display.setTextColor(TFT_GREEN, TFT_BLACK);
-  dispLx(1, L1Str);
+  M5Cardputer.Display.fillRect(W_CHR * 16, line1, W_CHR * 3, H_CHR, TFT_BLACK);
+  M5Cardputer.Display.setCursor(W_CHR * 16, line1);
   M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-  dispState();
+
+  String batLvlStr = "";
+  uint8_t batLvl = (uint8_t)M5.Power.getBatteryLevel();
+  if (batLvl > 99)
+    batLvlStr = String(batLvl);
+  else if (batLvl > 9)
+    batLvlStr = " " + String(batLvl);
+  else
+    batLvlStr = "  " + String(batLvl);
+
+  M5Cardputer.Display.print(batLvlStr);
 }
 
 void dispInit()
 {
-  M5Cardputer.Display.setBrightness(70);
+  M5Cardputer.Display.setBrightness(NORMAL_BRIGHT);
   M5Cardputer.Display.setRotation(1);
   M5Cardputer.Display.fillScreen(TFT_BLACK);
-  M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
   M5Cardputer.Display.setFont(&fonts::Font0);
   M5Cardputer.Display.setTextSize(2);
   M5Cardputer.Display.setTextDatum(top_left); // 文字の基準位置
   M5Cardputer.Display.setTextWrap(false);
   M5Cardputer.Display.setCursor(0, 0);
 
-  dispStateInit();
+  //-------------------"01234567890123456789"------------------;
+  const String L1Str = "            bat.   %";
+  const String L2Str = "fn1:Cap 2:CurM 3:Apo";
+  //-------------------"01234567890123456789"------------------;
+  M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  dispBleState(); // L0 : BLE connect information
+
+  dispLx(1, L1Str); // L1 : Battery Level
+  dispBatteryLevel();
+  
+  //  L2 : fn0 to fn3 SpecialMode TILTE
+  const int32_t line2 = 2 * H_CHR;
+  M5Cardputer.Display.setCursor(0, line2);  
+  M5Cardputer.Display.setTextColor(TFT_ORANGE, TFT_BLACK);
+  M5Cardputer.Display.print("fn1:");
+  M5Cardputer.Display.setTextColor(TFT_GREEN, TFT_BLACK);
+  M5Cardputer.Display.print("Cap ");
+
+  M5Cardputer.Display.setTextColor(TFT_ORANGE, TFT_BLACK);
+  M5Cardputer.Display.print("2:");
+  M5Cardputer.Display.setTextColor(TFT_GREEN, TFT_BLACK);
+  M5Cardputer.Display.print("CurM ");
+
+  M5Cardputer.Display.setTextColor(TFT_ORANGE, TFT_BLACK);
+  M5Cardputer.Display.print("3:");
+  M5Cardputer.Display.setTextColor(TFT_GREEN, TFT_BLACK);
+  M5Cardputer.Display.print("Apo");
+  // dispLx(2, L2Str); //  L2 : fn0 to fn3 SpecialMode TILTE
+
+  M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  dispState(); // L3 : fn0 to fn3 SpecialMode STATE
 }
 
 // #define WAIT_SERIAL_SETTING_DONE
@@ -582,7 +587,7 @@ void m5stack_begin()
   M5Cardputer.Speaker.setVolume(0);
 
   // initial display setup
-  M5Cardputer.Display.setBrightness(70);
+  M5Cardputer.Display.setBrightness(NORMAL_BRIGHT);
   M5Cardputer.Display.setRotation(1);
   M5Cardputer.Display.fillScreen(TFT_BLACK);
   M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
@@ -656,18 +661,17 @@ void POWER_OFF()
   }
 }
 
-void apoSetup()
+void apoInit()
 {
   uint8_t data;
   if (rdNVS(APO_TITLE, data))
     apoTmIndex = data;
 
-  if (apoTmIndex > 6)
-    apoTmIndex = 4;
+  if (apoTmIndex > apoTmMax)
+    apoTmIndex = apoTmDefault;
 
   apoTmout = apoTm[apoTmIndex] * 60 * 1000L;
   wrtNVS(APO_TITLE, apoTmIndex);
-  Serial.println("apoTmIndex: " + String(apoTmIndex));
   Serial.println("autoPowerOff: " + apoTmStr[apoTmIndex]);
 }
 
@@ -693,4 +697,82 @@ bool rdNVS(const String title, uint8_t &data)
   }
   nvs_close(nvs);
   return false;
+}
+
+static unsigned long prev_btlvl_disp_tm = 0L;
+static unsigned long prev_warn_disp_tm = 0L;
+static bool warnDispFlag = true;
+static int psState = 0;
+
+void powerSave()
+{
+  const unsigned long NEXT_BATLVL_TM = 3001L;     // ms: battery disp (3000以上で一番小さい素数)
+  const unsigned long LOW_BRIGHT_TM = 40 * 1000L; // ms: lower brightness
+  const unsigned long WARN_TM = 15 * 1000L;       // ms: warning befor APO
+  const unsigned long NEXT_WARN_TM = 500L;        // ms : warn disp On/Off time
+
+  if (millis() > prev_btlvl_disp_tm + NEXT_BATLVL_TM)
+  {
+    prev_btlvl_disp_tm = millis();
+    dispBatteryLevel();
+  }
+
+  if (millis() < lastKeyInput + LOW_BRIGHT_TM)
+  { // normal state : no power save
+    if (psState > 0)
+    {
+      psState = 0;
+      dispInit();
+    }
+    return;
+  }
+  else if (millis() < lastKeyInput + apoTmout - WARN_TM)
+  { // lower brightness
+    if (psState == 0)
+    {
+      psState = 1;
+      M5Cardputer.Display.setBrightness(LOW_BRIGHT);
+    }
+    return;
+  }
+  else if (millis() < lastKeyInput + apoTmout)
+  { // warnig disp
+    if (psState == 1)
+    {
+      prev_warn_disp_tm = millis();
+      warnDispFlag = true;
+      psState = 2;
+      return;
+    }
+  }
+  else
+  { // auto powerOff
+    psState = 3;
+    dispPowerOff();
+    POWER_OFF();
+    return;
+    //--- never return ---
+  }
+
+  //  **** warning disp ****
+  if (psState == 2)
+  {
+    if (millis() < prev_warn_disp_tm + NEXT_WARN_TM)
+      return;
+
+    prev_warn_disp_tm = millis();
+    if (warnDispFlag)
+    {
+      M5Cardputer.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
+      //-------- 01234567890123456789---
+      dispLx(3, "     SLEEP TIME     ");
+      M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+      warnDispFlag = !warnDispFlag;
+    }
+    else
+    {
+      dispLx(3, "");
+      warnDispFlag = !warnDispFlag;
+    }
+  }
 }
